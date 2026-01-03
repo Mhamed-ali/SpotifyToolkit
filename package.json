@@ -1,0 +1,13 @@
+{
+  "name": "spotify30",
+  "version": "1.0.0",
+  "description": "Spotify Toolkit WebApp",
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "server": "cd server && npm start",
+    "client": "cd client && npm run dev",
+    "dev": "echo \"Run 'npm run server' and 'npm run client' in separate terminals\""
+  },
+  "author": "",
+  "license": "ISC"
+}
