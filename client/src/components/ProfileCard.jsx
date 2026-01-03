@@ -1,7 +1,7 @@
 import React from 'react';
 import '../App.css'; // Ensure it has access to styles
 
-const ProfileCard = ({ profile }) => {
+const ProfileCard = ({ profile, playlistCount, onViewPlaylists, isLoading }) => {
     return (
         <div className="profile-container">
             {profile.images && profile.images.length > 0 && (
@@ -13,16 +13,13 @@ const ProfileCard = ({ profile }) => {
             )}
             <h2 className="profile-name">{profile.display_name}</h2>
             <p className="profile-stats">
-                {profile.followers.total} Followers • {profile.product === 'premium' ? 'Premium' : 'Free'}
+                {profile.product === 'premium' ? 'Premium' : 'Free'}
             </p>
 
-            <div className="action-buttons">
-                <button className="spotify-btn full-width" onClick={() => alert('Feature coming soon!')}>
-                    Find Duplicates
-                </button>
-                <button className="spotify-btn action-btn-outline full-width">
-                    Analyze Library
-                </button>
+            <div className={`status-box ${playlistCount !== null ? 'clickable' : ''}`}
+                style={{ marginBottom: 0, cursor: playlistCount !== null ? 'pointer' : 'default' }}
+                onClick={playlistCount !== null ? onViewPlaylists : undefined}>
+                {isLoading ? 'Loading...' : (playlistCount !== null ? `${playlistCount} Playlists found` : 'Loading playlists...')}
             </div>
         </div>
     );

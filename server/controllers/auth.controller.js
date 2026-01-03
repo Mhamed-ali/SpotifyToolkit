@@ -17,7 +17,7 @@ exports.login = (req, res) => {
     const state = generateRandomString(16);
     res.cookie(stateKey, state);
 
-    const scope = 'user-read-private user-read-email user-library-read';
+    const scope = 'user-read-private user-read-email user-library-read playlist-read-private playlist-read-collaborative';
 
     res.redirect('https://accounts.spotify.com/authorize?' +
         querystring.stringify({
@@ -25,7 +25,8 @@ exports.login = (req, res) => {
             client_id: config.CLIENT_ID,
             scope: scope,
             redirect_uri: config.REDIRECT_URI,
-            state: state
+            state: state,
+            show_dialog: true
         }));
 };
 

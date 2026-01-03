@@ -21,6 +21,16 @@
     max-width: 500px;
     width: 90%;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    transition: all 0.3s ease;
+}
+
+.glass-card.full-width-card {
+    max-width: 1200px;
+    padding: 2rem;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.95);
+    /* Solid dark background */
 }
 
 .title-gradient {
@@ -119,4 +129,189 @@
     background: rgba(255, 255, 255, 0.1);
     border-color: var(--text-primary);
     color: var(--text-primary);
+}
+
+/* Playlist View Styles */
+.playlists-container {
+    width: 100%;
+}
+
+.playlists-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    width: 100%;
+}
+
+.playlists-header h2 {
+    margin: 0;
+    font-size: 2rem;
+    flex-grow: 1;
+    text-align: right;
+    /* Or center if you prefer, but visually balancing the back button often works well */
+}
+
+.header-actions {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.logout-btn:hover {
+    border-color: #ff5555;
+    color: #ff5555;
+    background: rgba(255, 85, 85, 0.1);
+}
+
+.playlists-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 2rem;
+    width: 100%;
+}
+
+.playlist-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    /* content-visibility: auto; removed causing issues with hover expansion */
+    will-change: transform;
+}
+
+.playlist-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-8px) scale(1.02);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--accent);
+}
+
+.playlist-image-container {
+    width: 100%;
+    aspect-ratio: 1;
+    margin-bottom: 1rem;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.playlist-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.playlist-image-placeholder {
+    width: 100%;
+    height: 100%;
+    background: #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.playlist-info {
+    width: 100%;
+}
+
+.playlist-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.3s ease;
+}
+
+.playlist-card:hover .playlist-title {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+}
+
+/* Privacy Badge */
+.playlist-meta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.privacy-badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.privacy-badge.public {
+    background: rgba(29, 185, 84, 0.2);
+    color: #1db954;
+    border: 1px solid rgba(29, 185, 84, 0.3);
+}
+
+.privacy-badge.private {
+    background: rgba(255, 255, 255, 0.1);
+    color: #b3b3b3;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.playlist-stats {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.clickable:hover {
+    transform: scale(1.02);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .glass-card {
+        padding: 2rem;
+        width: 95%;
+    }
+
+    .title-gradient {
+        font-size: 2.5rem;
+    }
+
+    .playlists-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 1rem;
+    }
+
+    .playlists-header h2 {
+        font-size: 1.5rem;
+    }
+
+    .spotify-btn {
+        padding: 12px 32px;
+        /* Smaller button on mobile */
+    }
+}
+
+@media (max-width: 480px) {
+    .glass-card {
+        padding: 1.5rem;
+    }
+
+    .title-gradient {
+        font-size: 2rem;
+    }
+
+    .profile-name {
+        font-size: 1.5rem;
+    }
 }
