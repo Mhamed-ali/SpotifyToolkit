@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import './index.css'
 import './App.css'
+import { fetchProfile } from './services/spotify.service'
+import ProfileCard from './components/ProfileCard'
 
 function App() {
     const [serverMessage, setServerMessage] = useState('Checking server connection...')
@@ -17,13 +19,8 @@ function App() {
             // Clean up URL
             window.history.pushState({}, null, '/');
 
-            // Fetch Profile
-            fetch('https://api.spotify.com/v1/me', {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`
-                }
-            })
-                .then(res => res.json())
+            // Fetch Profile using service
+            fetchProfile(accessToken)
                 .then(data => setProfile(data))
                 .catch(err => console.error('Error fetching profile:', err));
 
@@ -63,34 +60,7 @@ function App() {
                         </button>
                     </>
                 ) : (
-                    <div className="profile-container">
-                        {profile.images && profile.images.length > 0 && (
-                            <img
-                                src={profile.images[0].url}
-                                alt="Profile"
-                                style={{
-                                    width: '120px',
-                                    height: '120px',
-                                    borderRadius: '50%',
-                                    marginBottom: '1rem',
-                                    border: '4px solid var(--accent)'
-                                }}
-                            />
-                        )}
-                        <h2 style={{ fontSize: '2rem', margin: '0 0 0.5rem 0' }}>{profile.display_name}</h2>
-                        <p style={{ color: 'var(--text-secondary)', margin: '0 0 2rem 0' }}>
-                            {profile.followers.total} Followers • {profile.product === 'premium' ? 'Premium' : 'Free'}
-                        </p>
-
-                        <div style={{ display: 'grid', gap: '1rem', width: '100%' }}>
-                            <button className="spotify-btn" style={{ width: '100%' }} onClick={() => alert('Feature coming soon!')}>
-                                Find Duplicates
-                            </button>
-                            <button className="spotify-btn" style={{ width: '100%', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-primary)' }}>
-                                Analyze Library
-                            </button>
-                        </div>
-                    </div>
+                    <ProfileCard profile={profile} />
                 )}
             </div>
         </div>

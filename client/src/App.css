@@ -70,10 +70,53 @@
     font-weight: 700;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     transform: scale(1);
+    border: none;
+    cursor: pointer;
 }
 
 .spotify-btn:hover {
     transform: scale(1.05) translateY(-2px);
     box-shadow: 0 10px 20px -10px rgba(29, 185, 84, 0.5);
     background-color: var(--accent-hover);
+}
+
+/* Profile Styles */
+.profile-image {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    margin-bottom: 1rem;
+    border: 4px solid var(--accent);
+}
+
+.profile-name {
+    font-size: 2rem;
+    margin: 0 0 0.5rem 0;
+}
+
+.profile-stats {
+    color: var(--text-secondary);
+    margin: 0 0 2rem 0;
+}
+
+.action-buttons {
+    display: grid;
+    gap: 1rem;
+    width: 100%;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.action-btn-outline {
+    background: transparent;
+    border: 1px solid var(--text-secondary);
+    color: var(--text-primary);
+}
+
+.action-btn-outline:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--text-primary);
+    color: var(--text-primary);
 }

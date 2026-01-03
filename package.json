@@ -9,5 +9,8 @@
     "dev": "echo \"Run 'npm run server' and 'npm run client' in separate terminals\""
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "server": "^1.0.42"
+  }
 }
