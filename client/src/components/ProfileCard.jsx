@@ -17,10 +17,12 @@ const ProfileCard = ({ profile, playlistCount, onViewPlaylists, isLoading }) => 
             </p>
 
             <div className={`status-box ${playlistCount !== null ? 'clickable' : ''}`}
-                style={{ marginBottom: 0, cursor: playlistCount !== null ? 'pointer' : 'default' }}
+                style={{ marginBottom: '1rem', cursor: playlistCount !== null ? 'pointer' : 'default' }}
                 onClick={playlistCount !== null ? onViewPlaylists : undefined}>
                 {isLoading ? 'Loading...' : (playlistCount !== null ? `${playlistCount} Playlists found` : 'Loading playlists...')}
             </div>
+
+
         </div>
     );
 };

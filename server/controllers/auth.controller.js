@@ -17,7 +17,7 @@ exports.login = (req, res) => {
     const state = generateRandomString(16);
     res.cookie(stateKey, state);
 
-    const scope = 'user-read-private user-read-email user-library-read playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played user-read-playback-state user-modify-playback-state user-read-currently-playing streaming app-remote-control user-follow-read user-follow-modify';
+    const scope = 'user-read-private user-read-email user-library-read playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played user-read-playback-state user-modify-playback-state user-read-currently-playing streaming app-remote-control user-follow-read user-follow-modify playlist-modify-public playlist-modify-private user-library-modify';
 
     res.redirect('https://accounts.spotify.com/authorize?' +
         querystring.stringify({

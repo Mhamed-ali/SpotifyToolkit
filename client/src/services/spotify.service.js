@@ -113,3 +113,52 @@ export const fetchAudioFeatures = async (token, trackIds) => {
     });
     return await result.json();
 }
+
+export const removeTracksFromPlaylist = async (token, playlistId, trackUris) => {
+    // Spotify API limit for deletion is 50 tracks per request for Saved Tracks, 100 for Playlists
+    const isLiked = playlistId === 'LIKED_SONGS';
+    const batchSize = isLiked ? 50 : 100;
+    const batches = [];
+
+    for (let i = 0; i < trackUris.length; i += batchSize) {
+        batches.push(trackUris.slice(i, i + batchSize));
+    }
+
+    // Process batches
+    for (const batch of batches) {
+        let url, body, method = "DELETE";
+
+        if (isLiked) {
+            // Remove from "Liked Songs" (User Library)
+            // Endpoint: DELETE /me/tracks
+            // Body: { "ids": ["id1", "id2"] }
+            // Extract IDs from URIs
+            const ids = batch.map(uri => uri.replace('spotify:track:', ''));
+            url = "https://api.spotify.com/v1/me/tracks";
+            body = { ids: ids }; // Correct format: Object with ids property
+        } else {
+            // Remove from Standard Playlist
+            // Endpoint: DELETE /playlists/{id}/tracks
+            // Body: { "tracks": [{ "uri": "spotify:track:..." }] }
+            url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`;
+            body = {
+                tracks: batch.map(uri => ({ uri }))
+            };
+        }
+
+        const result = await fetchWithRetry(url, {
+            method: method,
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!result.ok) {
+            throw { status: result.status, message: result.statusText };
+        }
+    }
+
+    return true; // Success
+};

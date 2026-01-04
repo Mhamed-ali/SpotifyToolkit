@@ -4,9 +4,52 @@ import AnalysisModal from './AnalysisModal';
 import TrackTable from './TrackTable';
 import VibeAnalysis from './VibeAnalysis';
 import ArtistAnalysis from './ArtistAnalysis';
+import TimelineAnalysis from './TimelineAnalysis';
+import PlaylistStats from './PlaylistStats';
+import DeepAnalysis from './DeepAnalysis';
 import { analyzeVibe } from '../services/analysis.utils';
 
-const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) => {
+const PlaylistAccordion = ({ title, tracks, playlist, visibleColumns, formatDate, formatDuration }) => {
+    const [isOpen, setIsOpen] = React.useState(true);
+
+    return (
+        <div className="playlist-accordion" style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', overflow: 'hidden' }}>
+            <div
+                className="accordion-header"
+                onClick={() => setIsOpen(!isOpen)}
+                style={{
+                    padding: '1rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    background: 'rgba(255,255,255,0.05)',
+                    borderBottom: isOpen ? '1px solid rgba(255,255,255,0.1)' : 'none'
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ transform: `rotate(${isOpen ? 90 : 0}deg)`, transition: 'transform 0.2s' }}>▶</span>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>({tracks.length})</span>
+                </div>
+            </div>
+
+            {isOpen && (
+                <div className="accordion-content">
+                    <TrackTable
+                        tracks={tracks}
+                        playlist={playlist}
+                        visibleColumns={visibleColumns}
+                        formatDate={formatDate}
+                        formatDuration={formatDuration}
+                    />
+                </div>
+            )}
+        </div>
+    );
+};
+
+const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, currentUserId }) => {
     // Column Visibility State
     const [visibleColumns, setVisibleColumns] = useState({
         index: true,
@@ -24,6 +67,7 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
 
     // Analysis State
     const [activeAnalysis, setActiveAnalysis] = useState(null); // 'vibe', 'timeline', 'artists', 'stats'
+    const [activeModules, setActiveModules] = useState([]); // List of currently active modules ['vibe', 'stats']
     const [analysisSettings, setAnalysisSettings] = useState({});
     const [analysisProgress, setAnalysisProgress] = useState(null); // { current, total, message }
     const [analysisResult, setAnalysisResult] = useState(null);
@@ -33,12 +77,22 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
         setShowAnalysisModal(false);
         const selectedModules = Object.keys(selectionConfig);
 
+        // Save all selected modules
+        setActiveModules(selectedModules);
+
         // Reset previous states
         setAnalysisResult(null);
         setAnalysisError(null);
         setAnalysisSettings({});
 
+        // Default to first selected module
+        let nextActive = selectedModules[0];
+
+        // Specific handling if Vibe is included (needs async)
         if (selectedModules.includes('vibe')) {
+            // If vibe is present, prioritize showing it or at least start it
+            nextActive = 'vibe';
+
             // Start Vibe Analysis
             setAnalysisProgress({ current: 0, total: 100, message: 'Starting analysis...' });
 
@@ -49,7 +103,7 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
 
                 // Done
                 setAnalysisResult(result);
-                setActiveAnalysis('vibe');
+                // Don't force set active here if user switched tabs, but initial load sets it
                 setAnalysisProgress(null);
             } catch (err) {
                 console.error("Analysis failed", err);
@@ -57,14 +111,27 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
                 setAnalysisProgress(null);
             }
         }
-        else if (selectedModules.includes('artists')) {
-            // Start Artist Analysis (Instant, no API calls needed)
-            setActiveAnalysis('artists');
+
+        // Handle settings for artists if present
+        if (selectedModules.includes('artists')) {
             setAnalysisSettings(selectionConfig['artists'] || []);
         }
-        else {
-            alert(`Analysis module not implemented yet: ${selectedModules.join(', ')}`);
+
+        if (selectedModules.includes('cleaner')) {
+            const subOpts = selectionConfig['cleaner'] || [];
+            if (subOpts.includes('advanced_filter')) {
+                setAnalysisSettings(prev => ({ ...prev, initialTab: 'advanced_filter' }));
+            } else {
+                setAnalysisSettings(prev => ({ ...prev, initialTab: 'duplicates' }));
+            }
+            // Prioritize cleaner if it's the only one or explicitly selected?
+            // If activeAnalysis is not set yet (by vibe), set it.
+            if (!nextActive || nextActive === 'cleaner') {
+                nextActive = 'cleaner';
+            }
         }
+
+        setActiveAnalysis(nextActive);
     };
 
     const toggleColumn = (key) => {
@@ -82,6 +149,20 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
         if (!dateString) return '-';
         return new Date(dateString).toLocaleDateString();
     };
+
+    const handleBack = () => {
+        setActiveAnalysis(null);
+        setActiveModules([]);
+        setAnalysisResult(null);
+        onBack(); // Calls parent back if needed, but here we just reset analysis mode usually
+        // Actually onBack usually goes back to Playlist List. 
+        // If we are in analysis mode, we want to go back to Track List first.
+    };
+
+    const exitAnalysis = () => {
+        setActiveAnalysis(null);
+        setActiveModules([]);
+    }
 
     return (
         <div className="playlist-page-layout">
@@ -174,6 +255,20 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
                         </div>
                         {/* Header Action Buttons */}
                         <div className="header-actions-area">
+                            <button
+                                className="spotify-btn header-analyze-btn"
+                                onClick={() => {
+                                    // Direct Deep Analysis
+                                    setShowAnalysisModal(false);
+                                    setActiveModules(['cleaner']);
+                                    setAnalysisSettings({ initialTab: 'duplicates' });
+                                    setActiveAnalysis('cleaner');
+                                }}
+                                disabled={!!analysisProgress}
+                                style={{ marginRight: '1rem', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
+                            >
+                                🧹 Deep Analysis
+                            </button>
                             <button className="spotify-btn header-analyze-btn" onClick={() => setShowAnalysisModal(true)} disabled={!!analysisProgress}>
                                 {analysisProgress ? 'Analyzing...' : '📊 Analyze Playlist'}
                             </button>
@@ -208,13 +303,50 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
                     <div className="status-box error" style={{ margin: '1rem 0' }}>{analysisError}</div>
                 )}
 
+                {/* Analysis Tab Bar */}
+                {activeModules.length > 0 && (
+                    <div className="analysis-tab-bar" style={{
+                        display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap',
+                        background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '8px'
+                    }}>
+                        <button
+                            className="spotify-btn action-btn-outline"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', border: 'none' }}
+                            onClick={exitAnalysis}
+                        >
+                            ← Back
+                        </button>
+                        <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '0 0.5rem' }}></div>
+
+                        {activeModules.map(module => (
+                            <button
+                                key={module}
+                                className={`spotify-btn ${activeAnalysis === module ? '' : 'action-btn-outline'}`}
+                                style={{
+                                    padding: '6px 16px', fontSize: '0.9rem',
+                                    background: activeAnalysis === module ? 'var(--accent)' : 'transparent',
+                                    color: activeAnalysis === module ? '#000' : '#fff',
+                                    border: activeAnalysis === module ? 'none' : '1px solid transparent'
+                                }}
+                                onClick={() => setActiveAnalysis(module)}
+                            >
+                                {module === 'vibe' && 'Vibe Check'}
+                                {module === 'artists' && 'Artist Breakdown'}
+                                {module === 'timeline' && 'Timeline'}
+                                {module === 'stats' && 'Playlist Stats'}
+                                {module === 'cleaner' && 'Deep Analysis'}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {activeAnalysis === 'vibe' ? (
                     analysisResult ? (
                         <VibeAnalysis
                             stats={analysisResult.stats}
                             warning={analysisResult.warning}
                             trackCount={tracks.length}
-                            onBack={() => setActiveAnalysis(null)}
+                            onBack={exitAnalysis}
                         />
                     ) : (
                         <div className="flex-center" style={{ height: '50vh' }}>
@@ -225,29 +357,105 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token }) =>
                     <ArtistAnalysis
                         tracks={tracks}
                         settings={analysisSettings}
-                        onBack={() => setActiveAnalysis(null)}
+                        onBack={exitAnalysis}
+                    />
+                ) : activeAnalysis === 'timeline' ? (
+                    <TimelineAnalysis
+                        tracks={tracks}
+                        onBack={exitAnalysis}
+                    />
+                ) : activeAnalysis === 'stats' ? (
+                    <PlaylistStats
+                        tracks={tracks}
+                        onBack={exitAnalysis}
+                    />
+                ) : activeAnalysis === 'cleaner' ? (
+                    <DeepAnalysis
+                        tracks={tracks}
+                        playlist={playlist}
+                        token={token}
+                        initialTab={analysisSettings.initialTab || 'duplicates'}
+                        onBack={() => {
+                            setActiveAnalysis(null);
+                            setAnalysisResult(null);
+                        }}
+                        isLoading={isFetching}
+                        currentUserId={currentUserId}
                     />
                 ) : (
                     <>
-                        <div className="track-list-container">
-                            <TrackTable
-                                tracks={tracks}
-                                playlist={playlist}
-                                visibleColumns={visibleColumns}
-                                formatDate={formatDate}
-                                formatDuration={formatDuration}
-                            />
-                        </div>
-                        {isFetching && (
+
+                        {playlist.id === 'COMBINED_ANALYSIS' ? (
+                            <div className="combined-playlists-view">
+                                <div className="combined-controls" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+                                    <button
+                                        className="spotify-btn action-btn-outline"
+                                        onClick={() => {
+                                            // Toggle all logic could go here, for now just a helper
+                                            // We'll implement individual toggles first
+                                            const allGroups = Object.values(
+                                                tracks.reduce((acc, t) => {
+                                                    const id = t.sourcePlaylist?.id || 'unknown';
+                                                    if (!acc[id]) acc[id] = true;
+                                                    return acc;
+                                                }, {})
+                                            );
+                                            // Implementation detail: we need state for this. 
+                                            // Let's rely on the internal state of the map below or lift it.
+                                            // Easier to just inline the map and use a simple local state for the list? 
+                                            // Actually, simplest is to make a small component for each group that manages its own state.
+                                        }}
+                                        style={{ fontSize: '0.8rem', padding: '4px 8px', display: 'none' }} // Hidden for now, self-managing
+                                    >
+                                        Toggle All
+                                    </button>
+                                </div>
+
+                                {Object.values(tracks.reduce((groups, track) => {
+                                    const source = track.sourcePlaylist || { id: 'unknown', name: 'Unknown Source' };
+                                    if (!groups[source.id]) {
+                                        groups[source.id] = {
+                                            info: source,
+                                            tracks: []
+                                        };
+                                    }
+                                    groups[source.id].tracks.push(track);
+                                    return groups;
+                                }, {})).map(group => (
+                                    <PlaylistAccordion
+                                        key={group.info.id}
+                                        title={group.info.name}
+                                        tracks={group.tracks}
+                                        playlist={playlist}
+                                        visibleColumns={visibleColumns}
+                                        formatDate={formatDate}
+                                        formatDuration={formatDuration}
+                                    />
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="track-list-container">
+                                <TrackTable
+                                    tracks={tracks}
+                                    playlist={playlist}
+                                    visibleColumns={visibleColumns}
+                                    formatDate={formatDate}
+                                    formatDuration={formatDuration}
+                                />
+                            </div>
+                        )}
+                        {/* Scroll Loading Indicator for flat lists (or combined if we want infinite scroll there too, but combined is usually fully fetched) */}
+                        {isFetching && playlist.id !== 'COMBINED_ANALYSIS' && (
                             <div className="scroll-loading-indicator">
                                 <div className="spinner-small"></div>
                                 <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading more songs...</span>
                             </div>
                         )}
+
                     </>
                 )}
             </div>
-        </div>
+        </div >
     );
 };
 

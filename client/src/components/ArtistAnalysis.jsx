@@ -90,13 +90,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
 
     return (
         <div className="analysis-container" style={{
-            position: 'absolute', // Changed from fixed to absolute to scroll with page
-            top: 0,
-            left: 0,
             width: '100%',
-            minHeight: '100vh', // Allow growing
-            background: '#121212',
-            zIndex: 2000,
             display: 'flex',
             flexDirection: 'column',
             padding: '2rem 3rem 1rem',

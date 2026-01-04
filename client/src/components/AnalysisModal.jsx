@@ -25,11 +25,7 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
             icon: '⏳',
             title: 'Timeline',
             desc: 'Era breakdown and years',
-            subOptions: [
-                { id: 'decades', label: 'Decades' },
-                { id: 'release_dist', label: 'Release Dist.' },
-                { id: 'oldest_newest', label: 'Extremes' }
-            ]
+            subOptions: []
         },
         {
             id: 'artists',
@@ -38,6 +34,16 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
             desc: 'Top artists and collaborations',
             subOptions: [
                 { id: 'collabs', label: 'Collabs' }
+            ]
+        },
+        {
+            id: 'cleaner',
+            icon: '🧹',
+            title: 'Deep Analysis',
+            desc: 'Deduplicate & Filter',
+            subOptions: [
+                { id: 'duplicates', label: 'Duplicates' },
+                { id: 'advanced_filter', label: 'Advanced Filter' }
             ]
         },
         {

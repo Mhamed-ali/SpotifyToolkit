@@ -338,6 +338,111 @@ function App() {
         setCurrentView('profile');
     }
 
+    const handleManualPlaylist = async () => {
+        const input = prompt("Enter Spotify Playlist Link or URI:");
+        if (!input) return;
+
+        // Simple extraction: try to get ID from URL or use as is
+        let id = input;
+        try {
+            if (input.includes('spotify.com/playlist/')) {
+                const url = new URL(input);
+                const pathParts = url.pathname.split('/');
+                id = pathParts[pathParts.indexOf('playlist') + 1];
+            } else if (input.includes('spotify:playlist:')) {
+                id = input.split(':')[2];
+            }
+
+            // Clean up queries?
+            if (id.includes('?')) id = id.split('?')[0];
+
+            if (!id) throw new Error("Invalid Playlist Link");
+
+            setPlaylistError(null);
+            setIsLoadingPlaylists(true); // Show some loading state if visible
+
+            const details = await fetchPlaylist(token, id);
+            if (details.error) throw details.error;
+
+            handlePlaylistClick(details);
+        } catch (err) {
+            console.error(err);
+            alert("Could not load playlist: " + (err.message || "Unknown error"));
+        } finally {
+            setIsLoadingPlaylists(false);
+        }
+    };
+
+    const handleMultiAnalyze = async (selectedPlaylists) => {
+        if (!selectedPlaylists || selectedPlaylists.length === 0) return;
+
+        setIsFetchingTracks(true);
+        setCurrentView('details');
+
+        // Create a temporary combined playlist object
+        const combinedPlaylist = {
+            id: 'COMBINED_ANALYSIS',
+            name: `Combined Analysis (${selectedPlaylists.length})`,
+            description: `Analysis of: ${selectedPlaylists.map(p => p.name).join(', ')}`,
+            images: [],
+            tracks: { total: selectedPlaylists.reduce((acc, p) => acc + p.tracks.total, 0) },
+            owner: { display_name: 'You' }
+        };
+
+        setSelectedPlaylist(combinedPlaylist); // Show details page immediately
+
+        try {
+            // Fetch all tracks in parallel
+            const promises = selectedPlaylists.map(async (p) => {
+                try {
+                    let items = [];
+                    // 1. Fetch First Page
+                    if (p.id === 'LIKED_SONGS') {
+                        const firstPage = await fetchSavedTracks(token, 0, 50);
+                        items = firstPage.items; // Keep wrapper
+
+                        // 2. Fetch Remaining
+                        if (p.tracks.total > 50) {
+                            const remaining = await fetchRemainingTracks(token, p.tracks.total, 'me');
+                            // fetchRemainingTracks for 'me' endpoint returns the wrapping object {added_at, track}.
+                            items = [...items, ...remaining];
+                        }
+                    } else {
+                        const firstPage = await fetchPlaylistTracks(token, p.id, 0, 100);
+                        items = firstPage.items; // Keep wrapper
+
+                        if (p.tracks.total > 100) {
+                            const remaining = await fetchRemainingTracks(token, p.tracks.total, null, p.id);
+                            // fetchRemainingTracks for playlist also returns wrapped objects
+                            items = [...items, ...remaining];
+                        }
+                    }
+
+                    // Tag with source playlist and ensure valid track
+                    return items
+                        .filter(i => i && i.track && i.track.id)
+                        .map(i => ({ ...i, sourcePlaylist: { id: p.id, name: p.name, owner: p.owner, collaborative: p.collaborative } }));
+
+                } catch (e) {
+                    console.error(`Failed to fetch tracks for ${p.name}`, e);
+                    return [];
+                }
+            });
+
+            const results = await Promise.all(promises);
+            // Flatten results
+            const allTracks = results.flat();
+
+            console.log("Combined analysis tracks:", allTracks.length);
+            setPlaylistTracks(allTracks);
+        } catch (err) {
+            console.error("Error fetching multi-playlist tracks:", err);
+            setPlaylistError("Failed to load tracks for some playlists.");
+        } finally {
+            setIsFetchingTracks(false);
+        }
+    };
+
     const handleLogout = () => {
         setToken(null);
         setProfile(null);
@@ -413,6 +518,8 @@ function App() {
                             onPlaylistClick={handlePlaylistClick}
                             likedSongsCount={likedSongsCount}
                             isLoading={isLoadingPlaylists}
+                            onManualPlaylist={handleManualPlaylist}
+                            onMultiAnalyze={handleMultiAnalyze}
                         />
                     </div>);
             case 'details':
@@ -437,6 +544,7 @@ function App() {
                                 onBack={handleBackToPlaylists}
                                 isFetching={isFetchingTracks}
                                 token={token}
+                                currentUserId={profile?.id}
                             />
                         ) : (
                             <div className="playlists-container">
