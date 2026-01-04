@@ -104,3 +104,12 @@ export const fetchPlaylist = async (token, playlistId) => {
     });
     return await result.json();
 }
+// Max 100 IDs per request
+export const fetchAudioFeatures = async (token, trackIds) => {
+    // Join IDs with comma
+    const idsString = trackIds.join(',');
+    const result = await fetchWithRetry(`https://api.spotify.com/v1/audio-features?ids=${idsString}`, {
+        method: "GET", headers: { Authorization: `Bearer ${token}` }
+    });
+    return await result.json();
+}

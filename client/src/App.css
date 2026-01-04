@@ -753,7 +753,7 @@
     left: 20px;
     top: 20px;
     /* Adjust based on your header/navbar */
-    z-index: 2000;
+    z-index: 3000;
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -822,4 +822,202 @@
 @media (min-width: 1024px) {
     /* On large screens, maybe show sidebar by default? 
        For now, let's keep it togglable to be clean. */
+}
+
+/* Header Actions */
+.header-actions-area {
+    margin-left: auto;
+    align-self: flex-end;
+}
+
+.header-analyze-btn {
+    padding: 12px 24px;
+    font-size: 1rem;
+    background-color: var(--accent);
+    color: #000;
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .header-actions-area {
+        margin-left: 0;
+        margin-top: 1rem;
+        width: 100%;
+        display: flex;
+        justify-content: center;
+    }
+
+    .header-analyze-btn {
+        width: 100%;
+    }
+}
+
+/* Analysis Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    /* Performance: No blur, just solid dimming */
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 4000;
+    animation: fadeIn 0.15s ease-out;
+}
+
+.modal-content {
+    width: 90%;
+    max-width: 800px;
+    padding: 3rem;
+    position: relative;
+    animation: scaleIn 0.2s cubic-bezier(0.1, 0.9, 0.2, 1);
+    /* Performance Fix: Override glass-card blur to avoid nested blurs */
+    backdrop-filter: none !important;
+    background: #121212;
+    /* Solid dark background */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    width: 100%;
+}
+
+.modal-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.5rem;
+    transition: color 0.1s ease;
+}
+
+.modal-close-btn:hover {
+    color: #fff;
+}
+
+.analysis-options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    width: 100%;
+}
+
+.analysis-option-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2rem;
+    text-align: left;
+    cursor: pointer;
+    /* Optimized Transition: Transform only (cheapest property) */
+    transition: transform 0.1s ease-out, background-color 0.1s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    /* Hardware Acceleration hint */
+    will-change: transform;
+    /* Prevent layout shift */
+    backface-visibility: hidden;
+}
+
+.analysis-option-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-4px);
+    border-color: var(--accent);
+    /* Performance: No shadow animation on hover */
+}
+
+.option-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.option-title {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem 0;
+    color: #fff;
+}
+
+.option-desc {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 0;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.analysis-option-card.selected {
+    border-color: var(--accent);
+    background: rgba(29, 185, 84, 0.1);
+    box-shadow: 0 0 0 2px var(--accent);
+}
+
+.modal-actions {
+    margin-top: 2.5rem;
+    width: 100%;
+}
+
+.analysis-sub-options {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+    width: 100%;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.sub-option-pill {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.1s ease;
+}
+
+.sub-option-pill:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.sub-option-pill.active {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
 }

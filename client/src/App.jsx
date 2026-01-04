@@ -11,6 +11,8 @@ function App() {
     // Initialize token from localStorage
     const [token, setToken] = useState(localStorage.getItem('spotify_access_token'))
     const [profile, setProfile] = useState(null)
+    const [isLoadingProfile, setIsLoadingProfile] = useState(false)
+    const [profileError, setProfileError] = useState(null)
     const [playlistCount, setPlaylistCount] = useState(null)
 
     // Initialize view from URL hash
@@ -207,14 +209,26 @@ function App() {
                 setServerMessage('Connected to Spotify!');
 
                 // 1. Kick off Profile/Metadata fetching in background
+                setIsLoadingProfile(true);
+                setProfileError(null);
+
                 // Don't await them here, just let them update state when ready
                 fetchProfile(activeToken)
                     .then(data => {
-                        if (data.error) console.error('Profile fetch error:', data.error);
+                        if (data.error) {
+                            console.error('Profile fetch error:', data.error);
+                            setProfileError(data.error.message || 'Failed to load profile');
+                            if (data.error.status === 401) {
+                                handleLogout(); // Token expired
+                            }
+                        }
                         else setProfile(data);
                     })
-                    .catch(err => console.error('Profile network error:', err))
-                    .finally(() => setIsLoadingProfile(false)); // Always turn off loading!
+                    .catch(err => {
+                        console.error('Profile network error:', err);
+                        setProfileError('Network error loading profile');
+                    })
+                    .finally(() => setIsLoadingProfile(false));
 
                 fetchUserPlaylists(activeToken, 1).then(data => {
                     if (data.error) console.error('Playlist count fetch error:', data.error);
@@ -354,7 +368,7 @@ function App() {
                 return (
                     <div className="glass-card">
                         <h1 className="title-gradient">Spotify Toolkit</h1>
-                        {!profile ? (
+                        {isLoadingProfile ? (
                             <>
                                 <p className="description-text">
                                     Loading profile...
@@ -362,6 +376,22 @@ function App() {
                                 <div className={`status-box ${isError ? 'error' : 'success'}`}>
                                     {serverMessage}
                                 </div>
+                            </>
+                        ) : profileError ? (
+                            <>
+                                <p className="description-text" style={{ color: '#ff6b6b' }}>
+                                    {profileError}
+                                </p>
+                                <button className="spotify-btn action-btn-outline" onClick={handleLogout}>
+                                    Disconnect & Retry
+                                </button>
+                            </>
+                        ) : !profile ? (
+                            <>
+                                {/* Fallback if we have no profile and no error yet, likely initial render before effect */}
+                                <p className="description-text">
+                                    Connecting...
+                                </p>
                             </>
                         ) : (
                             <ProfileCard
@@ -406,6 +436,7 @@ function App() {
                                 tracks={playlistTracks}
                                 onBack={handleBackToPlaylists}
                                 isFetching={isFetchingTracks}
+                                token={token}
                             />
                         ) : (
                             <div className="playlists-container">
