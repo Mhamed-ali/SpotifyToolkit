@@ -1,7 +1,18 @@
 import React from 'react';
 import '../App.css';
 
-const PlaylistsPage = ({ playlists, onBack, onLogout }) => {
+const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSongsCount, isLoading }) => {
+    if ((!playlists && isLoading) || (!playlists && !likedSongsCount && isLoading)) { // Simple loading check
+        return (
+            <div className="playlists-container">
+                <div className="playlists-header">
+                    <h2>Loading Library...</h2>
+                </div>
+                <div className="status-box">Fetching your playlists...</div>
+            </div>
+        )
+    }
+
     return (
         <div className="playlists-container">
             <div className="playlists-header">
@@ -17,8 +28,34 @@ const PlaylistsPage = ({ playlists, onBack, onLogout }) => {
             </div>
 
             <div className="playlists-grid">
-                {playlists.map(playlist => (
-                    <div key={playlist.id} className="playlist-card">
+                {likedSongsCount !== null && (
+                    <div
+                        className="playlist-card clickable liked-songs-card"
+                        onClick={() => onPlaylistClick({
+                            id: 'LIKED_SONGS',
+                            name: 'Liked Songs',
+                            description: 'Your saved tracks',
+                            images: [],
+                            owner: { display_name: 'You' },
+                            tracks: { total: likedSongsCount },
+                            public: false
+                        })}
+                    >
+                        <div className="playlist-image-container liked-songs-image">
+                            <span className="liked-heart">♥</span>
+                        </div>
+                        <div className="playlist-info">
+                            <h3 className="playlist-title">Liked Songs</h3>
+                            <p className="playlist-stats">{likedSongsCount} Tracks</p>
+                        </div>
+                    </div>
+                )}
+                {(playlists || []).map(playlist => (
+                    <div
+                        key={playlist.id}
+                        className="playlist-card clickable"
+                        onClick={() => onPlaylistClick(playlist)}
+                    >
                         <div className="playlist-image-container">
                             {playlist.images && playlist.images.length > 0 ? (
                                 <img
