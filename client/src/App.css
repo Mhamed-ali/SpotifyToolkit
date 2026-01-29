@@ -518,11 +518,12 @@
         display: none;
         /* Hide album on mobile */
     }
+}
 
-    .track-table th:nth-child(3),
-    .track-table td:nth-child(3) {
-        display: none;
-    }
+.track-list-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* Liked Songs Card */

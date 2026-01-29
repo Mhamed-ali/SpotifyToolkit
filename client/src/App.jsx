@@ -250,7 +250,7 @@ function App() {
                     window.location.hash = '';
                     setCurrentView('profile');
                 }
-                fetch('http://127.0.0.1:8888/')
+                fetch('/health')
                     .then(res => res.json())
                     .then(data => setServerMessage(data.message))
                     .catch(() => setServerMessage('Backend not connected (Is the server running on port 8888?)'))
@@ -300,7 +300,7 @@ function App() {
     };
 
     const handleLogin = () => {
-        window.location.href = 'http://127.0.0.1:8888/login';
+        window.location.href = '/login';
     }
 
     const handleViewPlaylists = () => {
@@ -494,9 +494,9 @@ function App() {
                         ) : !profile ? (
                             <>
                                 {/* Fallback if we have no profile and no error yet, likely initial render before effect */}
-                                <p className="description-text">
-                                    Connecting...
-                                </p>
+                                <a href="/login" className="login-button">
+                                    Login with Spotify
+                                </a>
                             </>
                         ) : (
                             <ProfileCard
@@ -541,10 +541,19 @@ function App() {
                             <PlaylistDetailsPage
                                 playlist={selectedPlaylist}
                                 tracks={playlistTracks}
-                                onBack={handleBackToPlaylists}
+                                onBack={() => {
+                                    window.location.hash = '#playlists';
+                                    setCurrentView('playlists');
+                                    setSelectedPlaylist(null);
+                                }}
+                                onHome={() => {
+                                    window.location.hash = '';
+                                    setCurrentView('profile');
+                                    setSelectedPlaylist(null);
+                                }}
                                 isFetching={isFetchingTracks}
                                 token={token}
-                                currentUserId={profile?.id}
+                                currentUserId={profile ? profile.id : null}
                             />
                         ) : (
                             <div className="playlists-container">

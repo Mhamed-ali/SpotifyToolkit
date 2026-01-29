@@ -12,5 +12,8 @@
   "license": "ISC",
   "dependencies": {
     "server": "^1.0.42"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.1.4"
   }
 }

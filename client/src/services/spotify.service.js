@@ -162,3 +162,134 @@ export const removeTracksFromPlaylist = async (token, playlistId, trackUris) => 
 
     return true; // Success
 };
+
+export const createPlaylist = async (token, userId, name, description, isPublic = false) => {
+    const result = await fetchWithRetry(`https://api.spotify.com/v1/users/${userId}/playlists`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            name: name,
+            description: description,
+            public: isPublic
+        })
+    });
+    if (!result.ok) throw { status: result.status, message: result.statusText };
+    return await result.json();
+};
+
+export const addTracksToPlaylist = async (token, playlistId, trackUris) => {
+    // Spotify limit: 100 tracks per request
+    const batchSize = 100;
+    const batches = [];
+    for (let i = 0; i < trackUris.length; i += batchSize) {
+        batches.push(trackUris.slice(i, i + batchSize));
+    }
+
+    for (const batch of batches) {
+        const result = await fetchWithRetry(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                uris: batch
+            })
+        });
+        if (!result.ok) throw { status: result.status, message: result.statusText };
+    }
+    return true;
+};
+// Helper to scan all user playlists and build a map of Track URI -> [Playlist Names]
+export const buildGlobalTrackMap = async (token, userId, onProgress) => {
+    // 1. Fetch All Playlists
+    let allPlaylists = [];
+    let nextUrl = `https://api.spotify.com/v1/me/playlists?limit=50`;
+
+    while (nextUrl) {
+        const res = await fetchWithRetry(nextUrl, {
+            method: "GET", headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await res.json();
+        allPlaylists = [...allPlaylists, ...data.items];
+        nextUrl = data.next;
+    }
+
+    // Filter out playlists not owned by user? Maybe keep all they follow? 
+    // Usually "Available in Playlists" implies playlists the user can see/edit or follows.
+    // Let's keep all.
+
+    const trackMap = {}; // URI -> Set(PlaylistNames)
+    const totalPlaylists = allPlaylists.length;
+    let processed = 0;
+
+    // 2. Fetch Tracks for each Playlist
+    // We can run some in parallel but limited to avoid rate limits
+    const BATCH_SIZE = 3; // Process 3 playlists at a time
+    for (let i = 0; i < totalPlaylists; i += BATCH_SIZE) {
+        const batch = allPlaylists.slice(i, i + BATCH_SIZE);
+
+        await Promise.all(batch.map(async (playlist) => {
+            try {
+                // Fetch first page
+                const firstPage = await fetchPlaylistTracks(token, playlist.id, 0, 100);
+                let items = firstPage.items;
+
+                // Fetch remaining
+                if (playlist.tracks.total > 100) {
+                    const remaining = await fetchRemainingTracks(token, playlist.tracks.total, null, playlist.id);
+                    items = [...items, ...remaining];
+                }
+
+                // Map tracks
+                items.forEach(item => {
+                    if (item && item.track && item.track.uri) {
+                        const uri = item.track.uri;
+                        if (!trackMap[uri]) trackMap[uri] = new Set();
+                        trackMap[uri].add(playlist.name);
+                    }
+                });
+
+            } catch (err) {
+                console.warn(`Failed to scan playlist ${playlist.name}`, err);
+            }
+        }));
+
+        processed += batch.length;
+        if (onProgress) onProgress(processed, totalPlaylists);
+    }
+
+    // 3. Scan Liked Songs (Saved Tracks)
+    try {
+        if (onProgress) onProgress(processed, totalPlaylists + 1); // Indicate +1 step
+
+        const firstPage = await fetchSavedTracks(token, 0, 50);
+        let likedItems = firstPage.items;
+
+        if (firstPage.total > 50) {
+            const remaining = await fetchRemainingTracks(token, firstPage.total, 'me');
+            likedItems = [...likedItems, ...remaining];
+        }
+
+        likedItems.forEach(item => {
+            if (item && item.track && item.track.uri) {
+                const uri = item.track.uri;
+                if (!trackMap[uri]) trackMap[uri] = new Set();
+                trackMap[uri].add("Liked Songs");
+            }
+        });
+    } catch (err) {
+        console.warn("Failed to scan Liked Songs", err);
+    }
+
+    // Convert Sets to Arrays
+    const resultMap = {};
+    Object.keys(trackMap).forEach(uri => {
+        resultMap[uri] = Array.from(trackMap[uri]);
+    });
+
+    return resultMap;
+};

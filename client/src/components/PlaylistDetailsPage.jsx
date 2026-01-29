@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import '../App.css';
+import { removeTracksFromPlaylist, createPlaylist, addTracksToPlaylist, buildGlobalTrackMap } from '../services/spotify.service';
+import { utils, writeFile } from 'xlsx';
+import ExportOptionsModal from './ExportOptionsModal';
 import AnalysisModal from './AnalysisModal';
 import TrackTable from './TrackTable';
 import VibeAnalysis from './VibeAnalysis';
@@ -49,7 +52,7 @@ const PlaylistAccordion = ({ title, tracks, playlist, visibleColumns, formatDate
     );
 };
 
-const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, currentUserId }) => {
+const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, token, currentUserId }) => {
     // Column Visibility State
     const [visibleColumns, setVisibleColumns] = useState({
         index: true,
@@ -164,6 +167,142 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, curr
         setActiveModules([]);
     }
 
+    const [showExportModal, setShowExportModal] = useState(false);
+
+    // Define available fields for export
+    // Define available fields for export
+    const EXPORT_FIELDS = [
+        {
+            key: 'track_name',
+            label: 'Track Name',
+            accessor: t => {
+                const url = t.external_urls?.spotify || '';
+                const name = (t.name || '').replace(/"/g, '""'); // Escape quotes for Excel formula
+                return url ? `=HYPERLINK("${url}","${name}")` : name;
+            }
+        },
+        {
+            key: 'available_in_playlists',
+            label: 'Available in Playlists',
+            accessor: (t, item) => {
+                // If we have enhanced data from Deep Analysis
+                if (item.sourcePlaylists && item.sourcePlaylists.length > 0) {
+                    return item.sourcePlaylists.join(", ");
+                }
+                // Fallback to single source
+                return item.sourcePlaylist ? item.sourcePlaylist.name : (playlist.name || '');
+            }
+        },
+        { key: 'artist_names', label: 'Artist Names', accessor: t => t.artists?.map(a => a.name).join(', ') || '' },
+        { key: 'album_name', label: 'Album Name', accessor: t => t.album?.name || '' },
+        { key: 'track_popularity', label: 'Popularity', accessor: t => t.popularity },
+        { key: 'track_duration_ms', label: 'Duration (ms)', accessor: t => t.duration_ms },
+        { key: 'track_explicit', label: 'Explicit', accessor: t => t.explicit ? 'Yes' : 'No' },
+        { key: 'track_number', label: 'Track Number', accessor: t => t.track_number },
+        { key: 'disc_number', label: 'Disc Number', accessor: t => t.disc_number },
+        { key: 'album_release_date', label: 'Release Date', accessor: t => t.album?.release_date || '' },
+        { key: 'album_type', label: 'Album Type', accessor: t => t.album?.album_type || '' },
+        { key: 'artist_ids', label: 'Artist IDs', accessor: t => t.artists?.map(a => a.id).join(', ') || '' },
+        { key: 'album_id', label: 'Album ID', accessor: t => t.album?.id || '' },
+        { key: 'track_id', label: 'Track ID', accessor: t => t.id },
+        { key: 'track_isrc', label: 'ISRC', accessor: t => t.external_ids?.isrc || '' },
+        {
+            key: 'danceability',
+            label: 'Danceability',
+            accessor: t => t.audio_features?.danceability || ''
+        },
+        { key: 'added_at', label: 'Added At', accessor: (t, item) => item.added_at ? new Date(item.added_at).toISOString() : '' },
+        { key: 'spotify_url', label: 'Spotify URL', accessor: t => t.external_urls?.spotify || '' },
+        { key: 'uri', label: 'URI', accessor: t => t.uri }
+    ];
+
+    const [exportProgress, setExportProgress] = useState(null);
+
+    const handleExportClick = () => {
+        setShowExportModal(true);
+    };
+
+    const executeExport = async (selectedFieldKeys) => {
+        if (!tracks || tracks.length === 0) return;
+
+        let finalTracks = tracks;
+
+        // Check if we need global playlist data
+        if (selectedFieldKeys.includes('available_in_playlists')) {
+            // Check if we already have detailed source info (e.g. from Deep Analysis)
+            // If not, we might need to fetch it.
+            // For now, let's always fetch if the user asks for this column in "Liked Songs" or standard view,
+            // to ensure they get the "Global" view they requested.
+
+            // Show loading
+            setShowExportModal(false); // Close modal first
+            setExportProgress("Initializing global library scan...");
+
+            try {
+                const globalMap = await buildGlobalTrackMap(token, currentUserId, (curr, total) => {
+                    setExportProgress(`Scanning playlists: ${curr}/${total}...`);
+                });
+
+                // Enrich tracks
+                finalTracks = tracks.map(item => {
+                    // item.track might be null for bad items
+                    if (!item.track || !item.track.uri) return item;
+
+                    const uri = item.track.uri;
+                    const playlists = globalMap[uri];
+
+                    if (playlists) {
+                        // Attach to a new property we use in accessor
+                        return { ...item, sourcePlaylists: playlists };
+                    }
+                    return item;
+                });
+
+            } catch (err) {
+                console.error("Global scan failed", err);
+                alert("Global playlist scan failed. Exporting with current view only.");
+            } finally {
+                setExportProgress(null);
+            }
+        }
+
+        const data = finalTracks.map(item => {
+            const t = item.track || item;
+            const row = {};
+
+            selectedFieldKeys.forEach(key => {
+                const fieldConfig = EXPORT_FIELDS.find(f => f.key === key);
+                if (fieldConfig) {
+                    row[key] = fieldConfig.accessor(t, item);
+                }
+            });
+
+            return row;
+        });
+
+        const ws = utils.json_to_sheet(data);
+
+        // Fix formulas (strings starting with '=') to be treated as Excel formulas
+        if (ws['!ref']) {
+            const range = utils.decode_range(ws['!ref']);
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cellAddress = utils.encode_cell({ c: C, r: R });
+                    const cell = ws[cellAddress];
+                    if (cell && cell.v && typeof cell.v === 'string' && cell.v.startsWith('=')) {
+                        cell.f = cell.v.substring(1); // Set formula (remove leading =)
+                        cell.v = undefined; // Remove string value so Excel calculates it
+                    }
+                }
+            }
+        }
+
+        const wb = utils.book_new();
+        utils.book_append_sheet(wb, ws, "Playlist Tracks");
+        const safeName = (playlist.name || 'Playlist').replace(/[^a-z0-9]/gi, '_');
+        writeFile(wb, `${safeName}_Export.xlsx`);
+    };
+
     return (
         <div className="playlist-page-layout">
             {/* Toggle Button for Mobile/Closed State */}
@@ -217,15 +356,24 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, curr
             {/* Main Content Area */}
             <div className="playlist-details-container main-content-area">
                 {!activeAnalysis && (
-                    <button className="spotify-btn action-btn-outline back-btn" onClick={onBack}>
-                        ← Back
-                    </button>
+                    <div style={{ display: 'flex', gap: '1rem' }}>
+                        <button className="spotify-btn action-btn-outline back-btn" onClick={onHome}>
+                            🏠 Main Menu
+                        </button>
+                        <button className="spotify-btn action-btn-outline back-btn" onClick={onBack}>
+                            ← Back
+                        </button>
+                    </div>
                 )}
 
                 {!activeAnalysis && (
                     <div className="details-header">
                         <div className="details-image-container">
-                            {playlist.images && playlist.images.length > 0 ? (
+                            {playlist.id === 'LIKED_SONGS' ? (
+                                <div className="playlist-image-placeholder liked-songs-bg">
+                                    <span style={{ fontSize: '4rem' }}>💜</span>
+                                </div>
+                            ) : playlist.images && playlist.images.length > 0 ? (
                                 <img
                                     src={playlist.images[0].url}
                                     alt={playlist.name}
@@ -257,6 +405,13 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, curr
                         <div className="header-actions-area">
                             <button
                                 className="spotify-btn header-analyze-btn"
+                                onClick={handleExportClick}
+                                style={{ marginRight: '1rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)' }}
+                            >
+                                📥 Export Excel
+                            </button>
+                            <button
+                                className="spotify-btn header-analyze-btn"
                                 onClick={() => {
                                     // Direct Deep Analysis
                                     setShowAnalysisModal(false);
@@ -276,11 +431,29 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, isFetching, token, curr
                     </div>
                 )}
 
+                <ExportOptionsModal
+                    isOpen={showExportModal}
+                    onClose={() => setShowExportModal(false)}
+                    onConfirm={executeExport}
+                    availableFields={EXPORT_FIELDS}
+                />
+
                 <AnalysisModal
                     isOpen={showAnalysisModal}
                     onClose={() => setShowAnalysisModal(false)}
                     onRun={handleAnalysisSelect}
                 />
+
+                {exportProgress && (
+                    <div className="modal-overlay">
+                        <div className="glass-card" style={{ padding: '2rem' }}>
+                            <div className="spinner-small" style={{ margin: '0 auto 1rem auto', width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--accent)' }}></div>
+                            <h3>Exporting...</h3>
+                            <p style={{ color: 'var(--text-secondary)' }}>{exportProgress}</p>
+                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>Checking all your playlists for matches.</p>
+                        </div>
+                    </div>
+                )}
 
                 {/* Progress Overlay */}
                 {analysisProgress && (

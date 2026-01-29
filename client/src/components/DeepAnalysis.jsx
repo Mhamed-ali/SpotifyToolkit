@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import '../App.css';
 import TrackTable from './TrackTable';
-import { removeTracksFromPlaylist } from '../services/spotify.service';
+import { removeTracksFromPlaylist, createPlaylist, addTracksToPlaylist } from '../services/spotify.service';
+import { utils, writeFile } from 'xlsx';
 
 const MultiSelect = ({ options, selected, onChange, label, placeholder = "Select..." }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -134,40 +135,39 @@ const MultiSelect = ({ options, selected, onChange, label, placeholder = "Select
 };
 
 // Helper: Detect Arabic Characters and Return Reason
-const getArabicMatchReason = (text) => {
+const getArabicMatchReason = (text, type = 'Text') => {
     if (!text) return null;
-    const lowerText = text.toLowerCase();
-
     // 1. Arabic Unicode Range: \u0600-\u06FF
-    if (/[\u0600-\u06FF]/.test(text)) return "Arabic Script";
+    if (/[\u0600-\u06FF]/.test(text)) return `Arabic Script in ${type}`;
 
     // 2. Enhanced Keyword Matching
     const keywords = [
         "Habibi", "Arabic", "Arab", "Middle East", "MENA", "Orient", "Shaabi", "Tarab",
         "Dabke", "Mahraganat", "Mawal", "Khaleeji", "Andalusian", "Baladi", "Mizmar",
         "Khaliji", "Maghreb", "Layali", "Gharam", "Ashqan", "Hob", "Albi", "Ahlan", "Ya Leil",
-        "Omri", "Bint", "Ya", "Rouh", "Samra", "Sahar", "Ahwak", "Enta", "Shams", "Zaman"
+        "Omri", "Bint", "Rouh", "Samra", "Sahar", "Ahwak", "Enta", "Shams", "Zaman"
     ];
     // Use word boundaries for list matches to avoid false positives (e.g. "sary" in "Anniversary")
     const matchedKeyword = keywords.find(k => {
         const pattern = new RegExp(`\\b${k}\\b`, 'i');
         return pattern.test(text);
     });
-    if (matchedKeyword) return `Keyword: ${matchedKeyword}`;
+    if (matchedKeyword) return `Keyword: ${matchedKeyword} (${type})`;
 
-    // 3. Known Artists List
+    // 3. Known Artists List (Broad Match - OK for unique names)
+    // removed "ruby" from here to avoid "Ruby" (English band) or album/title false positives
     const knownArtists = [
         "cairokee", "sharmoofers", "ahmed", "saad", "mohammed", "saeed", "wegz", "zap", "tharwat", "perrie",
         "angham", "marwan", "pablo", "kamel", "shahyn", "mozmin", "laboudi", "sary", "hany", "telecom",
         "egypt", "mekky", "dina", "wedidi", "muslim", "zena", "emad", "chemix", "dartro", "mahmoud",
-        "el", "esseily", "hamza", "namira", "ghaliaa", "samer", "doumet", "eljoee", "chaama", "racha", "rizk",
-        "ghizlane", "melih", "lubany", "ruby", "amr diab", "mohamed mounir", "tamer hosny", "sherine", "hamo bika",
+        "esseily", "hamza", "namira", "ghaliaa", "samer", "doumet", "eljoee", "chaama", "racha", "rizk",
+        "ghizlane", "melih", "lubany", "amr diab", "mohamed mounir", "tamer hosny", "sherine", "hamo bika",
         "abdel halim hafez", "umm kulthum", "hakim", "ramadan", "hamaki", "mahragan", "sandy", "mostafa amar",
         "hisham abbas", "ehab tawfik", "fairuz", "elissa", "nancy ajram", "haifa wehbe", "wael kfoury", "fares karam",
         "carole samaha", "majida el roumi", "ragheb alama", "melhem zein", "myriam fares", "joseph attieh",
         "assi el hallani", "julia boutros", "ziad rahbani", "marwan khoury", "saber rebai", "assala nasri",
         "george wassouf", "samira tawfik", "omar souleyman", "faia younan", "balqees", "ibrahim tatlises",
-        "sahar taha", "lena chamamyan", "sham", "fayrouz karawya", "kazem al saher", "saif nabeel", "hatem al iraqi",
+        "sahar taha", "lena chamamyan", "fayrouz karawya", "kazem al saher", "saif nabeel", "hatem al iraqi",
         "rahma riad", "majid al mohandis", "ali jassim", "mohammed al salim", "aseel hameem", "hossam al rassam",
         "cheb khaled", "cheb mami", "cheb hasni", "zina daoudia", "saad lamjarred", "douzi", "fnaire", "balti",
         "l'artiste", "soolking", "hamid bouchnak", "reda taliani", "faudel", "samira said", "latifa", "amina",
@@ -180,10 +180,14 @@ const getArabicMatchReason = (text) => {
         const pattern = new RegExp(`\\b${artist}\\b`, 'i');
         return pattern.test(text);
     });
-    if (matchedArtist) return `Artist: ${matchedArtist}`;
+    if (matchedArtist) return `Artist Match: ${matchedArtist} (in ${type})`;
 
     return null;
 };
+
+// Strict Artists: Only match if EXACLTY this name appears in the ARTISTS list.
+// Does not match titles or albums, and does not match as a substring.
+const strictArabicArtists = ["ruby", "sandy", "dina", "muslim", "nour"];
 
 const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicates', isLoading = false, currentUserId }) => {
     // ... (existing state) ...
@@ -482,13 +486,19 @@ const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicate
             let arabicReason = null;
             if (filterCriteria.arabicOnly) {
                 // Check in priority order: Title, Artist, Album
-                const titleMatch = getArabicMatchReason(t.name);
+                const titleMatch = getArabicMatchReason(t.name, 'Title');
                 if (titleMatch) {
-                    arabicReason = titleMatch; // e.g. "Arabic Script" or "Keyword: Habibi"
+                    arabicReason = titleMatch;
                 } else {
                     // Check artists
                     for (const artist of t.artists) {
-                        const artistMatch = getArabicMatchReason(artist.name);
+                        // 1. Strict Match for common names
+                        if (strictArabicArtists.includes(artist.name.toLowerCase())) {
+                            arabicReason = `Known Artist: ${artist.name}`;
+                            break;
+                        }
+                        // 2. Standard Fuzzy/Broad Match
+                        const artistMatch = getArabicMatchReason(artist.name, 'Artist');
                         if (artistMatch) {
                             arabicReason = artistMatch;
                             break;
@@ -496,7 +506,7 @@ const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicate
                     }
                     // Check album if still no match
                     if (!arabicReason) {
-                        const albumMatch = getArabicMatchReason(t.album?.name);
+                        const albumMatch = getArabicMatchReason(t.album?.name, 'Album');
                         if (albumMatch) arabicReason = albumMatch;
                     }
                 }
@@ -685,6 +695,55 @@ const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicate
         }
     };
 
+    const handleCreatePlaylist = async (urisToUse) => {
+        if (urisToUse.size === 0) return;
+        const name = prompt(`Enter a name for your new playlist (${urisToUse.size} tracks):`);
+        if (!name) return;
+
+        setIsProcessing(true);
+        setStatusMessage('Creating playlist...');
+
+        try {
+            const description = `Autogenerated by Spotify Toolkit. Contains ${urisToUse.size} tracks from analysis.`;
+            const newPlaylist = await createPlaylist(token, currentUserId, name, description, false); // Private by default
+
+            setStatusMessage(`Adding ${urisToUse.size} tracks...`);
+            await addTracksToPlaylist(token, newPlaylist.id, Array.from(urisToUse));
+
+            setStatusMessage('Done! Playlist Created.');
+            setTimeout(() => {
+                setIsProcessing(false);
+                setStatusMessage('');
+            }, 2000);
+        } catch (err) {
+            console.error('Playlist creation failed', err);
+            alert('Failed to create playlist: ' + (err.message || 'Unknown error'));
+            setIsProcessing(false);
+        }
+    };
+
+    const handleExportExcel = (tracksToExport, fileName = "Spotify_Export.xlsx") => {
+        if (!tracksToExport || tracksToExport.length === 0) return;
+
+        const data = tracksToExport.map(item => {
+            const t = item.track || item; // Handle both wrapper objects and raw tracks
+            return {
+                "Track Name": t.name,
+                "Artist": t.artists?.map(a => a.name).join(', ') || 'Unknown',
+                "Album": t.album?.name || 'Unknown',
+                "Duration (m)": t.duration_ms ? (t.duration_ms / 60000).toFixed(2) : '',
+                "Release Date": t.album?.release_date || '',
+                "URI": t.uri,
+                "Match Reason": item.matchReasons?.join(', ') || ''
+            };
+        });
+
+        const ws = utils.json_to_sheet(data);
+        const wb = utils.book_new();
+        utils.book_append_sheet(wb, ws, "Tracks");
+        writeFile(wb, fileName);
+    };
+
     // Shared columns
     const columns = { index: true, art: true, title: true, album: true, duration: true };
 
@@ -807,6 +866,22 @@ const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicate
                             </label>
                         </div>
                         <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button
+                                className="spotify-btn action-btn-outline"
+                                onClick={() => handleExportExcel(duplicates.flat(), 'Duplicates_Export.xlsx')}
+                                disabled={duplicates.length === 0}
+                                style={{ borderColor: '#2e7d32', color: '#2e7d32' }}
+                            >
+                                📥 Export
+                            </button>
+                            <button
+                                className="spotify-btn action-btn-outline"
+                                onClick={() => handleCreatePlaylist(selectedDuplicates)}
+                                disabled={selectedDuplicates.size === 0 || isProcessing}
+                                style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                            >
+                                + New Playlist
+                            </button>
                             <button className="spotify-btn action-btn-outline" onClick={selectAllDuplicates} disabled={duplicates.length === 0}>
                                 {isAllExtrasSelected ? 'Deselect All' : 'Select All'}
                             </button>
@@ -1069,14 +1144,40 @@ const DeepAnalysis = ({ tracks, playlist, token, onBack, initialTab = 'duplicate
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                             <h3 style={{ margin: 0 }}>Results ({filteredTracks.length})</h3>
-                            <button
-                                className="spotify-btn"
-                                style={{ background: '#ff5555', padding: '8px 16px', fontSize: '0.9rem' }}
-                                onClick={() => handleRemove(selectedFiltered)}
-                                disabled={selectedFiltered.size === 0 || isProcessing}
-                            >
-                                Remove Selected ({selectedFiltered.size})
-                            </button>
+                            <div style={{ display: 'flex', gap: '1rem' }}>
+                                <button
+                                    className="spotify-btn action-btn-outline"
+                                    onClick={() => handleExportExcel(filteredTracks, 'Filtered_Export.xlsx')}
+                                    disabled={filteredTracks.length === 0}
+                                    style={{ borderColor: '#2e7d32', color: '#2e7d32', padding: '8px 16px', fontSize: '0.9rem' }}
+                                >
+                                    📥 Export
+                                </button>
+                                <button
+                                    className="spotify-btn action-btn-outline"
+                                    onClick={() => handleCreatePlaylist(selectedFiltered)}
+                                    disabled={selectedFiltered.size === 0 || isProcessing}
+                                    style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px 16px', fontSize: '0.9rem' }}
+                                >
+                                    + New Playlist
+                                </button>
+                                <button
+                                    className="spotify-btn action-btn-outline"
+                                    onClick={selectAllFiltered}
+                                    disabled={filteredTracks.length === 0}
+                                    style={{ padding: '8px 16px', fontSize: '0.9rem' }}
+                                >
+                                    {selectedFiltered.size === filteredTracks.length && filteredTracks.length > 0 ? 'Deselect All' : 'Select All'}
+                                </button>
+                                <button
+                                    className="spotify-btn"
+                                    style={{ background: '#ff5555', padding: '8px 16px', fontSize: '0.9rem' }}
+                                    onClick={() => handleRemove(selectedFiltered)}
+                                    disabled={selectedFiltered.size === 0 || isProcessing}
+                                >
+                                    Remove Selected ({selectedFiltered.size})
+                                </button>
+                            </div>
                         </div>
 
                         {/* View Mode Toggle (Combined Analysis Only) */}
