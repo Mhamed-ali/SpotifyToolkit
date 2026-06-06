@@ -8,4 +8,7 @@ export interface ISpotifyApiService {
   getPlaylistsByIds(ids: string[]): Promise<SpotifyPlaylist[]>;
   removeTracksFromPlaylist(playlistId: string, trackUris: string[]): Promise<void>;
   removeTracksFromLikedSongs(trackIds: string[]): Promise<void>;
+  getArtists(ids: string[]): Promise<any[]>;
+  createPlaylist(userId: string, name: string, description?: string): Promise<SpotifyPlaylist>;
+  addTracksToPlaylist(playlistId: string, trackUris: string[]): Promise<void>;
 }

@@ -100,18 +100,18 @@ export class LoggerService implements ILoggerService {
     return formatted + '\n';
   }
 
-  private writeToFile(logData: string): void {
+  private async writeToFile(logData: string): Promise<void> {
     if (!this.isFileLoggingEnabled) return;
 
     try {
       if (fs.existsSync(this.logFilePath)) {
-        const stats = fs.statSync(this.logFilePath);
+        const stats = await fs.promises.stat(this.logFilePath);
         if (stats.size >= this.maxLogFileSize) {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          fs.renameSync(this.logFilePath, path.join(this.logDirectory, `server-${timestamp}.log`));
+          await fs.promises.rename(this.logFilePath, path.join(this.logDirectory, `server-${timestamp}.log`));
         }
       }
-      fs.appendFileSync(this.logFilePath, logData, 'utf8');
+      await fs.promises.appendFile(this.logFilePath, logData, 'utf8');
     } catch (err) {
       console.error('CRITICAL: Failed to write to log file:', err);
     }
@@ -121,20 +121,20 @@ export class LoggerService implements ILoggerService {
     if (this.logLevel < 3) return;
     const logData = this.formatMessage('INFO', message, context, meta);
     if (this.enableConsoleLogging) console.log(logData.trim());
-    this.writeToFile(logData);
+    this.writeToFile(logData).catch(() => {});
   }
 
   public warn(message: string, context?: any, meta?: LoggerMeta): void {
     if (this.logLevel < 2) return;
     const logData = this.formatMessage('WARN', message, context, meta);
     if (this.enableConsoleLogging) console.warn(logData.trim());
-    this.writeToFile(logData);
+    this.writeToFile(logData).catch(() => {});
   }
 
   public error(message: string, error?: any, meta?: LoggerMeta): void {
     if (this.logLevel < 1) return;
     const logData = this.formatMessage('ERROR', message, error, meta);
     if (this.enableConsoleLogging) console.error(logData.trim());
-    this.writeToFile(logData);
+    this.writeToFile(logData).catch(() => {});
   }
 }
