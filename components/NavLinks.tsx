@@ -30,7 +30,12 @@ export default function NavLinks() {
           if (activeTab === '/processing') {
             e.preventDefault();
             window.dispatchEvent(new CustomEvent('request-cancel-processing', { detail: { target: '/' } }));
+          } else if (activeTab === '/extract') {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/' } }));
+            setActiveTab('/');
           } else {
+            window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/' } }));
             setActiveTab('/');
           }
         }}

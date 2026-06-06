@@ -1,51 +1,40 @@
-"use client";
+import { useState, useEffect, useRef } from "react";
 
-import { useState, useRef, useEffect } from "react";
 import { SpotifyPlaylist } from "@/lib/types/spotify";
-import { useProcessingEngine } from "@/hooks/useProcessingEngine";
-
-import ProcessingStats from "./ProcessingStats";
+import { useExtractEngine } from "@/hooks/useExtractEngine";
+import ExtractionResults from "./ExtractionResults";
 import ProcessingQueue from "./ProcessingQueue";
-import ProcessingFindings from "./ProcessingFindings";
-import DuplicateReview from "./DuplicateReview";
-import { AdvancedOptionsState } from "./AdvancedOptions";
 
-export default function ProcessingEngine({ 
+export default function ExtractEngine({ 
   initialPlaylists,
-  advancedOptions,
-  setAdvancedOptions,
-  onCancel 
+  userId,
+  onCancel
 }: { 
   initialPlaylists: SpotifyPlaylist[], 
-  advancedOptions?: AdvancedOptionsState,
-  setAdvancedOptions?: (opts: AdvancedOptionsState) => void,
-  onCancel?: () => void 
+  userId: string,
+  onCancel?: () => void
 }) {
   const {
     isFinished,
     currentPlaylistIndex,
     currentTrackIndex,
     currentTrack,
-    scannedTracks,
-    duplicatesFound,
-    arabicTracksCount,
-    extractedArabicTracks,
+    extractedTracks,
     recentFindings,
-    clusters,
+    statusText,
+    newPlaylistUrl,
+    currentPass,
     cancelProcessing,
-  } = useProcessingEngine(initialPlaylists, advancedOptions);
+  } = useExtractEngine(initialPlaylists, userId);
 
   // Custom Modal State
   const [showCancelModal, setShowCancelModal] = useState(false);
   const pendingNavigationRef = useRef<string | null>(null);
 
-
-  
   useEffect(() => {
     const handleRequestCancel = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (isFinished) {
-        // If finished, just allow them to navigate away without the warning modal
         if (onCancel) onCancel();
         else window.location.href = customEvent.detail?.target || '/';
         return;
@@ -59,16 +48,22 @@ export default function ProcessingEngine({
     return () => {
       window.removeEventListener('request-cancel-processing', handleRequestCancel);
     };
-  }, [isFinished]);
+  }, [isFinished, onCancel]);
 
   const totalTracks = initialPlaylists.reduce((acc, p) => acc + (p.tracks?.total || 0), 0);
-  let percentage = isFinished ? 100 : (totalTracks === 0 ? 0 : Math.floor((scannedTracks / totalTracks) * 100));
-  if (!isFinished && percentage >= 100) {
-    percentage = 99; // Cap at 99% until isFinished is actually true
-  }
-
-  const currentPlaylist = initialPlaylists[currentPlaylistIndex];
+  const previousPlaylistsTracks = initialPlaylists.slice(0, currentPlaylistIndex).reduce((acc, p) => acc + (p.tracks?.total || 0), 0);
+  const currentPlaylist = initialPlaylists[currentPlaylistIndex] || initialPlaylists[0];
   const queuePlaylists = initialPlaylists.slice(currentPlaylistIndex + 1);
+  
+  let currentPlaylistWork = 0;
+  if (currentPass === 1) currentPlaylistWork = currentTrackIndex;
+  if (currentPass === 2) currentPlaylistWork = currentPlaylist?.tracks?.total || 0;
+  if (currentPass === 3) currentPlaylistWork = (currentPlaylist?.tracks?.total || 0) + currentTrackIndex;
+
+  const totalCompletedWork = (previousPlaylistsTracks * 2) + currentPlaylistWork;
+  const percentage = isFinished ? 100 : (totalTracks === 0 ? 0 : Math.floor((totalCompletedWork / (totalTracks * 2)) * 100));
+  
+  const trueScannedTracks = previousPlaylistsTracks + (currentPass >= 2 ? (currentPlaylist?.tracks?.total || 0) : currentTrackIndex);
 
   return (
     <div className="w-full max-w-5xl mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -83,17 +78,15 @@ export default function ProcessingEngine({
           )}
         </div>
         <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-2 sm:mb-3">
-          {isFinished ? "Analysis Complete!" : "Processing Playlists"}
+          {isFinished ? "Extraction Complete!" : "Extracting Arabic Tracks"}
         </h2>
         <p className="text-zinc-400 text-sm sm:text-base max-w-lg mx-auto">
-          {isFinished 
-            ? "We've finished scanning your selected playlists. Check out the results below."
-            : "Analyzing tracks for duplicates and Arabic content"}
+          {statusText}
         </p>
       </div>
 
       <div className="bg-[#18181B] rounded-3xl p-4 sm:p-8 shadow-2xl">
-        {/* Progress Bar Area */}
+        {/* Progress Bar */}
         <div className="mb-10">
           <div className="flex justify-between items-end mb-3">
             <span className="text-white font-bold tracking-wide">Overall Progress</span>
@@ -107,41 +100,22 @@ export default function ProcessingEngine({
           </div>
         </div>
 
-        {/* Current State Grid OR Duplicate Review */}
-        {isFinished ? (
-          <DuplicateReview 
-            clusters={clusters}
-            advancedOptions={advancedOptions || {
-              matchCriteria: 'strict',
-              durationTolerance: 2,
-              keepStrategy: 'oldest',
-              scope: 'cross'
-            }}
-            setAdvancedOptions={setAdvancedOptions || (() => {})} 
-            onReturnToDashboard={() => {
-              if (onCancel) onCancel();
-              else window.location.href = '/';
-            }} 
-          />
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 relative">
+        {/* Current State */}
+        {!isFinished ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 relative mb-8">
             <div className="bg-zinc-800/60 rounded-xl p-4 sm:p-5 flex flex-col">
               <h3 className="text-white text-sm sm:text-base font-semibold mb-3 sm:mb-4 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#1ED760] animate-pulse"></span>
-                Currently Processing
+                {statusText}
               </h3>
               
               <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-5">
                 <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-md bg-zinc-700 flex-shrink-0 overflow-hidden shadow-lg">
-                  {currentPlaylist?.id === 'liked-songs' ? (
-                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#450af5] to-[#8e8ee5]">
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                    </div>
-                  ) : currentPlaylist?.images?.[0]?.url ? (
+                  {currentPlaylist?.images?.[0]?.url ? (
                     <img src={currentPlaylist.images[0].url} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-zinc-500">
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
                     </div>
                   )}
                 </div>
@@ -150,7 +124,7 @@ export default function ProcessingEngine({
                     {currentPlaylist?.name || 'Loading...'}
                   </p>
                   <p className="text-zinc-400 text-xs mt-0 sm:mt-0.5">
-                    Track {currentTrackIndex}{currentPlaylist?.tracks?.total === -1 ? '' : `/${currentPlaylist?.tracks?.total || 0}`}
+                    Pass {currentPass}/3 • Track {currentTrackIndex} / {currentPlaylist?.tracks?.total || 0}
                   </p>
                 </div>
               </div>
@@ -159,39 +133,74 @@ export default function ProcessingEngine({
                 <svg className="w-4 h-4 text-[#1ED760] flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
                 <span className="truncate">
                   {currentTrack?.track?.name ? `"${currentTrack.track.name}"` : "Initializing..."}
-                  {currentTrack?.track?.artists?.length ? ` - ${currentTrack.track.artists[0].name}` : ''}
                 </span>
               </div>
             </div>
 
             <ProcessingQueue queuePlaylists={queuePlaylists} />
           </div>
+        ) : (
+          <ExtractionResults 
+            initialPlaylists={initialPlaylists}
+            extractedTracks={extractedTracks}
+            recentFindings={recentFindings}
+            userId={userId}
+            onCancel={onCancel}
+          />
         )}
 
-        <ProcessingStats 
-          scannedTracks={scannedTracks}
-          duplicatesFound={duplicatesFound}
-          arabicTracksCount={arabicTracksCount}
-          totalTracks={totalTracks}
-          isFinished={isFinished}
-        />
+        {/* Stats Row */}
+        <div className="grid grid-cols-3 gap-3 sm:gap-4 mt-6 sm:mt-8">
+          <div className="bg-zinc-800/60 rounded-xl p-4 sm:p-5 text-center flex flex-col items-center justify-center border border-zinc-700/50">
+            <span className="text-2xl sm:text-3xl font-bold text-white mb-1 tabular-nums">{trueScannedTracks.toLocaleString()}</span>
+            <span className="text-xs text-zinc-400 font-medium uppercase tracking-wider">Tracks Scanned</span>
+          </div>
+          <div className="bg-zinc-800/60 rounded-xl p-4 sm:p-5 text-center flex flex-col items-center justify-center border border-zinc-700/50">
+            <span className="text-2xl sm:text-3xl font-bold text-[#1ED760] mb-1 tabular-nums">{extractedTracks.length.toLocaleString()}</span>
+            <span className="text-xs text-zinc-400 font-medium uppercase tracking-wider">Arabic Tracks</span>
+          </div>
+          <div className="bg-zinc-800/60 rounded-xl p-4 sm:p-5 text-center flex flex-col items-center justify-center border border-zinc-700/50">
+            <span className="text-2xl sm:text-3xl font-bold text-blue-400 mb-1 tabular-nums">{Math.max(0, totalTracks - trueScannedTracks).toLocaleString()}</span>
+            <span className="text-xs text-zinc-400 font-medium uppercase tracking-wider">Remaining</span>
+          </div>
+        </div>
       </div>
+
+      {/* Recent Findings (Only during extraction) */}
+      {!isFinished && recentFindings.length > 0 && (
+        <div className="mt-8 bg-[#18181B] rounded-2xl p-4 sm:p-6 shadow-xl border border-zinc-800/50">
+          <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#1ED760]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+            Extracted Arabic Tracks Log
+          </h3>
+          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+            {recentFindings.map((finding, idx) => (
+              <div key={idx} className="flex items-center gap-3 p-2 rounded-lg bg-zinc-800/30 hover:bg-zinc-800/50 transition-colors">
+                {finding.track.album?.images?.[0]?.url && (
+                  <img src={finding.track.album.images[0].url} className="w-8 h-8 rounded object-cover" alt="" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-white text-sm truncate font-medium">{finding.track.name}</p>
+                  <p className="text-zinc-500 text-xs truncate">
+                    {finding.track.artists?.map((a: any) => a.name).join(', ')} • <span className="text-[#1ED760]">{finding.reason}</span>
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!isFinished && (
         <>
-          <ProcessingFindings recentFindings={recentFindings} />
-
-          {/* Controls */}
-          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
+          {/* Cancel Button */}
+          <div className="mt-8 flex justify-center">
             <button 
-              onClick={() => { 
-                pendingNavigationRef.current = '/';
-                setShowCancelModal(true);
-              }}
-              className="w-full sm:w-auto px-8 py-3 bg-zinc-800 hover:bg-red-500/10 text-white hover:text-red-500 rounded-xl text-sm font-bold transition-all duration-300 border border-zinc-700 hover:border-red-500/50 flex items-center justify-center gap-2"
+              onClick={() => setShowCancelModal(true)}
+              className="px-8 py-3 bg-zinc-800 hover:bg-red-500/10 text-white hover:text-red-500 rounded-xl text-sm font-bold transition-all duration-300 border border-zinc-700 hover:border-red-500/50 flex items-center justify-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-              Cancel Processing
+              Cancel Extraction
             </button>
           </div>
         </>
@@ -205,16 +214,16 @@ export default function ProcessingEngine({
               <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center mb-4 mx-auto">
                 <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
               </div>
-              <h3 className="text-xl font-bold text-white text-center mb-2">Cancel Processing?</h3>
+              <h3 className="text-xl font-bold text-white text-center mb-2">Cancel Extraction?</h3>
               <p className="text-zinc-400 text-sm text-center mb-6">
-                Are you sure you want to leave? All your current processing progress will be permanently lost.
+                Are you sure you want to leave? All your current extraction progress will be permanently lost.
               </p>
               <div className="flex gap-3">
                 <button 
                   onClick={() => setShowCancelModal(false)}
                   className="flex-1 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-sm font-bold transition-colors border border-zinc-700"
                 >
-                  No, Keep Processing
+                  No, Keep Extracting
                 </button>
                 <button 
                   onClick={() => {
@@ -225,7 +234,6 @@ export default function ProcessingEngine({
                       if (pendingNavigationRef.current.startsWith('http')) {
                         window.location.href = pendingNavigationRef.current;
                       } else {
-                        // Fallback
                         window.location.href = '/';
                       }
                     } else {

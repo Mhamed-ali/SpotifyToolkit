@@ -5,6 +5,7 @@ import { SpotifyPlaylist } from "@/lib/types/spotify";
 import { clientLogger } from "@/lib/utils/clientLogger";
 
 import ProcessingEngine from "./ProcessingEngine";
+import ExtractEngine from "./ExtractEngine";
 import DashboardToolbar from "./DashboardToolbar";
 import PlaylistGrid from "./PlaylistGrid";
 import FloatingActionBar from "./FloatingActionBar";
@@ -29,7 +30,7 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
   
   // Advanced Options State
   const [advancedOptions, setAdvancedOptions] = useState<AdvancedOptionsState>({
-    matchCriteria: 'strict',
+    matchCriteria: 'fuzzy',
     durationTolerance: 2,
     keepStrategy: 'oldest',
     scope: 'per'
@@ -37,7 +38,21 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
   
   // SPA Routing State (0ms delay!)
   const [isProcessingMode, setIsProcessingMode] = useState(false);
+  const [isExtractMode, setIsExtractMode] = useState(false);
   const [processingPlaylists, setProcessingPlaylists] = useState<SpotifyPlaylist[]>([]);
+
+  // Listen for navbar navigation to reset modes
+  useEffect(() => {
+    const handleNav = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.tab === '/') {
+        setIsExtractMode(false);
+        setIsProcessingMode(false);
+      }
+    };
+    window.addEventListener('spa-navigate', handleNav);
+    return () => window.removeEventListener('spa-navigate', handleNav);
+  }, []);
 
   // Derived State
   const filteredPlaylists = playlists.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -56,6 +71,7 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
 
   const handleAnalyzePlaylists = () => {
     const selected = playlists.filter(p => selectedIds.has(p.id));
+    if (selected.length === 0) return;
     
     // Generate a Unique Request ID for tracing this specific action
     const newReqId = 'Req-' + Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -66,6 +82,32 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
     window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/processing' } }));
     clientLogger.info("Starting processing in SPA mode with playlists:", selected.length);
   };
+
+  const handleExtractPlaylists = () => {
+    const selected = playlists.filter(p => selectedIds.has(p.id));
+    if (selected.length === 0) return;
+
+    const newReqId = 'Req-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+    clientLogger.setLoggerRequestId(newReqId);
+
+    setProcessingPlaylists(selected);
+    setIsExtractMode(true);
+    window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/extract' } }));
+    clientLogger.info("Starting extraction in SPA mode for playlists:", selected.length);
+  };
+
+  if (isExtractMode && processingPlaylists.length > 0) {
+    return (
+      <ExtractEngine 
+        initialPlaylists={processingPlaylists}
+        userId={userId}
+        onCancel={() => {
+          setIsExtractMode(false);
+          window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/' } }));
+        }}
+      />
+    );
+  }
 
   if (isProcessingMode) {
     return (
@@ -117,6 +159,7 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
       <FloatingActionBar 
         selectedCount={selectedIds.size}
         onAnalyze={handleAnalyzePlaylists}
+        onExtract={handleExtractPlaylists}
       />
     </>
   );

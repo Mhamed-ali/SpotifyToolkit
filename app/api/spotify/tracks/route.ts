@@ -26,7 +26,8 @@ export async function GET(request: Request) {
     const streamPrefix = streamId ? `[Stream ${streamId}] ` : '';
     
     const reqId = request.headers.get('x-request-id') || undefined;
-    const user = request.headers.get('x-user-id') || undefined;
+    const rawUser = request.headers.get('x-user-id');
+    const user = rawUser ? decodeURIComponent(rawUser) : undefined;
     const meta = { user, reqId };
     
     // Log dispatch immediately on the server before making the request
@@ -45,9 +46,10 @@ export async function GET(request: Request) {
     const streamId = searchParams.get('streamId');
     const streamPrefix = streamId ? `[Stream ${streamId}] ` : '';
     const reqId = request.headers.get('x-request-id') || undefined;
-    const user = request.headers.get('x-user-id') || undefined;
+    const rawUser = request.headers.get('x-user-id');
+    const user = rawUser ? decodeURIComponent(rawUser) : undefined;
     
-    if (error.name === 'AbortError' || error.message?.includes('aborted')) {
+    if (error.name === 'AbortError' || error.name === 'ResponseAborted' || String(error).includes('aborted') || String(error).includes('ResponseAborted')) {
       logger.warn(`[SpotifyTracksRoute] ${streamPrefix}Fetch aborted by client (Cancellation)`, undefined, { user, reqId });
     } else {
       logger.error(`[SpotifyTracksRoute] ${streamPrefix}Failed to fetch tracks in proxy route`, error.message || error, { user, reqId });

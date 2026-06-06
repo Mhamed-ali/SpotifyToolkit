@@ -109,17 +109,21 @@ export class SpotifyApiService implements ISpotifyApiService {
     // For regular playlists, we only need specific fields to save bandwidth. For liked songs, fields param is not supported.
     const url = isLikedSongs 
       ? `https://api.spotify.com/v1/me/tracks?offset=${offset}&limit=${actualLimit}`
-      : `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=${actualLimit}&fields=items(added_at,track(id,name,duration_ms,external_urls,artists(name,id),album(name,id))),total,next,offset,limit`;
+      : `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=${actualLimit}&fields=items(added_at,track(id,name,uri,duration_ms,external_urls,artists(name,id),album(name,id))),total,next,offset,limit`;
     
     const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
+        'Accept-Language': 'ar,en-US;q=0.9'
       },
       signal,
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify API error: ${response.statusText}`);
+      const error: any = new Error(`Spotify API error: ${response.statusText}`);
+      error.status = response.status;
+      error.retryAfter = response.headers.get('Retry-After');
+      throw error;
     }
 
     return response.json();
@@ -187,6 +191,74 @@ export class SpotifyApiService implements ISpotifyApiService {
 
       if (!response.ok) {
         throw new Error(`Failed to remove tracks from Liked Songs: ${response.statusText}`);
+      }
+    }
+  }
+  public async getArtists(ids: string[]): Promise<any[]> {
+    if (!ids || ids.length === 0) return [];
+    
+    const artists: any[] = [];
+    // Spotify API allows fetching max 50 artists per request
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50);
+      const response = await fetch(`https://api.spotify.com/v1/artists?ids=${chunk.join(',')}`, {
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch artists: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.artists) {
+        artists.push(...data.artists);
+      }
+    }
+    return artists;
+  }
+
+  public async createPlaylist(userId: string, name: string, description: string = ''): Promise<SpotifyPlaylist> {
+    const payload = {
+      name,
+      description,
+      public: false // Defaulting to private
+    };
+
+    const response = await fetch(`https://api.spotify.com/v1/users/${userId}/playlists`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create playlist: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  public async addTracksToPlaylist(playlistId: string, trackUris: string[]): Promise<void> {
+    if (!trackUris || trackUris.length === 0) return;
+
+    // Spotify API allows adding max 100 tracks per request
+    for (let i = 0; i < trackUris.length; i += 100) {
+      const chunk = trackUris.slice(i, i + 100);
+      const payload = { uris: chunk };
+
+      const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to add tracks to playlist ${playlistId}: ${response.statusText}`);
       }
     }
   }
