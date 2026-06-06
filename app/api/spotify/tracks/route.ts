@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { ServiceFactory } from '@/lib/core/ServiceFactory';
+import { calculateDataSize } from '@/lib/utils/formatBytes';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -24,19 +25,34 @@ export async function GET(request: Request) {
     const streamId = searchParams.get('streamId');
     const streamPrefix = streamId ? `[Stream ${streamId}] ` : '';
     
+    const reqId = request.headers.get('x-request-id') || undefined;
+    const user = request.headers.get('x-user-id') || undefined;
+    const meta = { user, reqId };
+    
     // Log dispatch immediately on the server before making the request
-    logger.info(`[SpotifyTracksAPI] ${streamPrefix}Dispatching fetch for chunk at offset ${offset}`);
+    logger.info(`[SpotifyTracksAPI] ${streamPrefix}Dispatching fetch for chunk at offset ${offset}`, undefined, meta);
 
     const apiService = ServiceFactory.getSpotifyApiService(token.value);
     const data = await apiService.getPlaylistTracks(playlistId, offset, limit, request.signal);
     
     // Log success immediately on the server
-    logger.info(`[SpotifyTracksAPI] ${streamPrefix}Successfully fetched ${data.items?.length || 0} tracks from offset ${offset}`);
+    const sizeStr = calculateDataSize(data);
+    logger.info(`[SpotifyTracksAPI] ${streamPrefix}Successfully fetched ${data.items?.length || 0} tracks (${sizeStr}) from offset ${offset}`, undefined, meta);
     
     return NextResponse.json(data);
   } catch (error: any) {
     const logger = ServiceFactory.getLoggerService();
-    logger.error(`[SpotifyTracksRoute] Failed to fetch tracks in proxy route`, error.message || error);
+    const streamId = searchParams.get('streamId');
+    const streamPrefix = streamId ? `[Stream ${streamId}] ` : '';
+    const reqId = request.headers.get('x-request-id') || undefined;
+    const user = request.headers.get('x-user-id') || undefined;
+    
+    if (error.name === 'AbortError' || error.message?.includes('aborted')) {
+      logger.warn(`[SpotifyTracksRoute] ${streamPrefix}Fetch aborted by client (Cancellation)`, undefined, { user, reqId });
+    } else {
+      logger.error(`[SpotifyTracksRoute] ${streamPrefix}Failed to fetch tracks in proxy route`, error.message || error, { user, reqId });
+    }
+    
     return NextResponse.json(
       { error: error.message, retryAfter: error.retryAfter }, 
       { status: error.status || 500 }

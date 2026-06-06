@@ -29,19 +29,15 @@ Built for speed and modern web standards:
 
 ---
 
-## 🚀 Running Locally (Testing Branches)
-
-> **Note:** The local tunneling scripts are designed exclusively for the `testing` and `main` branches to facilitate local development. They are intentionally removed from the `production` branch.
-
-We have built custom local tunnel scripts so you can easily run this app and authenticate with Spotify without worrying about configuring static `localhost` callback URIs every time you code.
+## 🚀 Running Locally
 
 **Prerequisites:** Node.js installed.
 
 1. **Development Mode:**
-   Run `start-dev.bat`. This automatically starts the Next.js dev server AND launches a LocalTunnel instance. It automatically injects the tunnel URL into your `.env.local` file so Spotify Auth works instantly.
+   Run `npm run dev`. This automatically starts the Next.js dev server on `http://localhost:3000`.
    
 2. **Local Production Mode:**
-   Run `start-prod.bat`. This builds the Next.js optimized production bundle locally, starts it, and exposes it securely via a production LocalTunnel instance.
+   Run `npm run build` followed by `npm start`. This builds the Next.js optimized production bundle locally and serves it on port 3000.
 
 ---
 

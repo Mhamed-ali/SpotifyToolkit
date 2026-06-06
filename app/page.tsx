@@ -5,6 +5,7 @@ import Navbar from '@/components/Navbar';
 import DashboardSkeletons from '@/components/DashboardSkeletons';
 import DashboardWrapper from '@/components/DashboardWrapper';
 import { ServiceFactory } from '@/lib/core/ServiceFactory';
+import { calculateDataSize } from '@/lib/utils/formatBytes';
 
 export default async function Home() {
   const cookieStore = await cookies();
@@ -17,14 +18,21 @@ export default async function Home() {
     const logger = ServiceFactory.getLoggerService();
     logger.info("[PageLoader] page.tsx started rendering");
 
-    const initialPlaylistsPromise = apiService.getInitialPlaylists().then(res => {
-      logger.info(`[PageLoader] getInitialPlaylists resolved in ${Date.now() - t0}ms`);
+    const userPromise = apiService.getUserProfile().then(res => {
+      const userStr = res.display_name || res.id || 'unknown';
+      const sizeStr = calculateDataSize(res);
+      logger.info(`[PageLoader] getUserProfile resolved in ${Date.now() - t0}ms (${sizeStr})`, undefined, { user: userStr });
       return res;
     });
 
-    const userPromise = apiService.getUserProfile().then(res => {
-      logger.info(`[PageLoader] getUserProfile resolved in ${Date.now() - t0}ms`);
-      return res;
+    const initialPlaylistsPromise = Promise.all([
+      apiService.getInitialPlaylists(),
+      userPromise
+    ]).then(([playlists, user]) => {
+      const userStr = user.display_name || user.id || 'unknown';
+      const sizeStr = calculateDataSize(playlists);
+      logger.info(`[PageLoader] getInitialPlaylists resolved in ${Date.now() - t0}ms (${sizeStr})`, undefined, { user: userStr });
+      return playlists;
     });
 
     return (
@@ -32,7 +40,7 @@ export default async function Home() {
         <Navbar userPromise={userPromise} />
         <main className="flex-1 max-w-[1400px] w-full mx-auto px-4 sm:px-6 py-8">
           <Suspense fallback={<DashboardSkeletons />}>
-            <DashboardWrapper initialPlaylistsPromise={initialPlaylistsPromise} />
+            <DashboardWrapper initialPlaylistsPromise={initialPlaylistsPromise} userPromise={userPromise} />
           </Suspense>
         </main>
       </div>

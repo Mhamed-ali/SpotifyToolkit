@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { SpotifyPlaylist } from "@/lib/types/spotify";
 import { clientLogger } from "@/lib/utils/clientLogger";
 
@@ -12,7 +12,12 @@ import FloatingActionBar from "./FloatingActionBar";
 import AdvancedOptions, { AdvancedOptionsState } from "./AdvancedOptions";
 import { usePlaylists } from "@/hooks/usePlaylists";
 
-export default function Dashboard({ initialPlaylists }: { initialPlaylists: SpotifyPlaylist[] }) {
+export default function Dashboard({ initialPlaylists, userId }: { initialPlaylists: SpotifyPlaylist[], userId: string }) {
+  // Set User Context in Logger synchronously so all hooks have access immediately
+  if (userId && clientLogger.getLoggerUser() !== userId) {
+    clientLogger.setLoggerUser(userId);
+  }
+
   // Use custom hook to handle background playlist fetching
   const { playlists } = usePlaylists(initialPlaylists);
   
@@ -27,7 +32,7 @@ export default function Dashboard({ initialPlaylists }: { initialPlaylists: Spot
     matchCriteria: 'strict',
     durationTolerance: 2,
     keepStrategy: 'oldest',
-    scope: 'cross'
+    scope: 'per'
   });
   
   // SPA Routing State (0ms delay!)
@@ -51,6 +56,11 @@ export default function Dashboard({ initialPlaylists }: { initialPlaylists: Spot
 
   const handleAnalyzePlaylists = () => {
     const selected = playlists.filter(p => selectedIds.has(p.id));
+    
+    // Generate a Unique Request ID for tracing this specific action
+    const newReqId = 'Req-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+    clientLogger.setLoggerRequestId(newReqId);
+
     setProcessingPlaylists(selected);
     setIsProcessingMode(true);
     window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/processing' } }));
@@ -75,7 +85,7 @@ export default function Dashboard({ initialPlaylists }: { initialPlaylists: Spot
     <>
       <div className="mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mb-2">Your Playlists</h1>
-        <p className="text-zinc-400 text-sm sm:text-base">Select playlists to deduplicate or extract Arabic tracks</p>
+        <p className="text-zinc-400 text-sm sm:text-base">Select playlists to remove duplicated or extract Arabic tracks</p>
       </div>
 
       <AdvancedOptions 

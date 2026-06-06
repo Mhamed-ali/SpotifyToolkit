@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { TrackCluster, TrackInstance } from '@/lib/utils/clustering';
+import { clientLogger } from "@/lib/utils/clientLogger";
 import AdvancedOptions, { AdvancedOptionsState } from './AdvancedOptions';
 
 interface DuplicateReviewProps {
@@ -64,9 +65,15 @@ export default function DuplicateReview({
     setIsRemoving(true);
     
     try {
+      const reqId = clientLogger.getLoggerRequestId();
+      const userId = clientLogger.getLoggerUser();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (reqId) headers['x-request-id'] = reqId;
+      if (userId) headers['x-user-id'] = userId;
+
       const res = await fetch('/api/spotify/remove', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ removals })
       });
       

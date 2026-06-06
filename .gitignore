@@ -186,7 +186,15 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Local Dev Tunnel Scripts
+start-dev.bat
+start-prod.bat
+scripts/dev-tunnel.mjs
+scripts/prod-tunnel.mjs
+
 # Agent and temporary files
 AGENTS.md
 CLAUDE.md
 tempREADME.md
+*.key
+/local/*

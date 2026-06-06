@@ -25,7 +25,7 @@ export default function LandingPage() {
           </h2>
 
           <p className="text-zinc-400 text-xs sm:text-sm md:text-base max-w-lg mb-6 sm:mb-10 leading-relaxed">
-            Deduplicate your playlists and extract Arabic tracks with ease. Streamline your Spotify experience in just a few clicks.
+            Remove duplicated tracks from your playlists and extract Arabic tracks with ease. Streamline your Spotify experience in just a few clicks.
           </p>
 
           {/* Feature List (Bento-style Glassmorphism) */}

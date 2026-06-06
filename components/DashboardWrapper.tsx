@@ -1,7 +1,8 @@
 import Dashboard from './Dashboard';
 import { SpotifyPlaylist } from '@/lib/types/spotify';
 
-export default async function DashboardWrapper({ initialPlaylistsPromise }: { initialPlaylistsPromise: Promise<SpotifyPlaylist[]> }) {
+export default async function DashboardWrapper({ initialPlaylistsPromise, userPromise }: { initialPlaylistsPromise: Promise<SpotifyPlaylist[]>, userPromise: Promise<any> }) {
   const initialPlaylists = await initialPlaylistsPromise;
-  return <Dashboard initialPlaylists={initialPlaylists} />;
+  const user = await userPromise;
+  return <Dashboard initialPlaylists={initialPlaylists} userId={user?.display_name || user?.id || 'unknown'} />;
 }
