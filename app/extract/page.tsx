@@ -33,7 +33,7 @@ export default async function ExtractPage(props: { searchParams: Promise<{ playl
     <div className="min-h-screen bg-zinc-950 font-sans selection:bg-[#1ED760]/30 flex flex-col pb-24 relative overflow-x-hidden">
       <Navbar userPromise={Promise.resolve(user)} />
       <main className="flex-1 max-w-[1000px] w-full mx-auto px-0 sm:px-6 py-8 sm:py-12">
-        <ExtractEngine initialPlaylist={playlists[0]} userId={user.id} />
+        <ExtractEngine initialPlaylists={playlists} userId={user.id} />
       </main>
     </div>
   );

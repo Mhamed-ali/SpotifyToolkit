@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect, useRef } from 'react';
 import { SpotifyPlaylist } from '@/lib/types/spotify';
 import { isArabicByRegex, isArabicByGenre } from '@/lib/utils/arabicDetection';
