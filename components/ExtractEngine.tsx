@@ -24,7 +24,6 @@ export default function ExtractEngine({
     extractedTracks,
     recentFindings,
     statusText,
-    newPlaylistUrl,
     currentPass,
     cancelProcessing,
   } = useExtractEngine(initialPlaylists, userId);

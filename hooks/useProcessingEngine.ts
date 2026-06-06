@@ -101,7 +101,7 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
                 if (reqId) headers['x-request-id'] = reqId;
                 if (userId) headers['x-user-id'] = encodeURIComponent(userId);
 
-                const res = await fetch(`/api/spotify/tracks?playlistId=${encodeURIComponent(playlist.id)}&offset=${offset}&limit=${limit}&streamId=${streamId}`, { 
+                const res = await fetch(`/api/spotify/tracks?playlistId=${encodeURIComponent(playlist.id)}&offset=${fetchOffset}&limit=${limit}&streamId=1`, { 
                   signal,
                   headers
                 });
