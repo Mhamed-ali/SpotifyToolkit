@@ -1,9 +1,15 @@
+let globalUser: string | undefined;
+let globalReqId: string | undefined;
+
 export const clientLogger = {
   info: (message: string, details?: any, source?: string, immediate?: boolean) => log('info', message, details, source, immediate),
   warn: (message: string, details?: any, source?: string, immediate?: boolean) => log('warn', message, details, source, immediate),
   error: (message: string, details?: any, source?: string, immediate?: boolean) => log('error', message, details, source, immediate),
+  setLoggerUser: (user: string) => { globalUser = user; },
+  getLoggerUser: () => globalUser,
+  setLoggerRequestId: (reqId: string) => { globalReqId = reqId; },
+  getLoggerRequestId: () => globalReqId,
 };
-
 const log = (level: string, message: string, details?: any, source?: string, immediate?: boolean) => {
   // Always log to the browser console for immediate visibility
   if (level === 'error') console.error(message, details);
@@ -16,7 +22,9 @@ const log = (level: string, message: string, details?: any, source?: string, imm
       level, 
       message, 
       details: typeof details === 'object' ? JSON.stringify(details) : details, 
-      source: source || 'ClientUI' 
+      source: source || 'ClientUI',
+      user: globalUser,
+      reqId: globalReqId
     });
 
     // If immediate is true, force a high-priority fetch instead of the background sendBeacon queue

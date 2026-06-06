@@ -12,13 +12,13 @@
 import { NextResponse } from 'next/server';
 import { ServiceFactory } from '../../../../lib/core/ServiceFactory';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const authService = ServiceFactory.getSpotifyAuthService();
     const sessionManager = ServiceFactory.getSessionManager();
     const logger = ServiceFactory.getLoggerService();
 
-    logger.info('Initiating Spotify login flow');
+    logger.info(`Initiating Spotify login flow`);
 
     // 1. Generate and securely store the CSRF state
     const state = await sessionManager.createCsrfState();

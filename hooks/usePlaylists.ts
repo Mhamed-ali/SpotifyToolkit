@@ -13,7 +13,11 @@ export function usePlaylists(initialPlaylists: SpotifyPlaylist[]) {
   useEffect(() => {
     clientLogger.info("Dashboard mounted. Initial playlists count:", initialPlaylists.length);
 
-    fetch('/api/spotify/playlists/remaining')
+    const userId = clientLogger.getLoggerUser();
+    const headers: Record<string, string> = {};
+    if (userId) headers['x-user-id'] = userId;
+
+    fetch('/api/spotify/playlists/remaining', { headers })
       .then(res => {
         if (!res.ok) throw new Error('Network response was not ok');
         return res.json();

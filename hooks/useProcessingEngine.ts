@@ -91,7 +91,16 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
             let retries = 3;
             while (retries > 0 && !cancelledRef.current) {
               try {
-                const res = await fetch(`/api/spotify/tracks?playlistId=${playlist.id}&offset=${offset}&limit=${limit}&streamId=${streamId}`, { signal });
+                const reqId = clientLogger.getLoggerRequestId();
+                const userId = clientLogger.getLoggerUser();
+                const headers: Record<string, string> = {};
+                if (reqId) headers['x-request-id'] = reqId;
+                if (userId) headers['x-user-id'] = userId;
+
+                const res = await fetch(`/api/spotify/tracks?playlistId=${playlist.id}&offset=${offset}&limit=${limit}&streamId=${streamId}`, { 
+                  signal,
+                  headers
+                });
                 if (!res.ok) {
                   if (res.status === 429) {
                     await new Promise(r => setTimeout(r, 4000));
@@ -203,6 +212,7 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
   }, [initialPlaylists]);
 
   const cancelProcessing = () => {
+    clientLogger.warn("User manually aborted playlist processing", undefined, undefined, true);
     cancelledRef.current = true;
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();

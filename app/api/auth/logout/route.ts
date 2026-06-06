@@ -8,8 +8,6 @@ export async function GET(request: Request) {
     const sessionManager = ServiceFactory.getSessionManager();
     const logger = ServiceFactory.getLoggerService();
 
-    logger.info('User initiated logout');
-
     const cookieStore = await cookies();
     
     // 1. Delete session cookies

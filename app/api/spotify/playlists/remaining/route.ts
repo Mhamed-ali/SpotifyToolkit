@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { ServiceFactory } from '@/lib/core/ServiceFactory';
+import { calculateDataSize } from '@/lib/utils/formatBytes';
 
 export async function GET(request: Request) {
   try {
@@ -13,6 +14,11 @@ export async function GET(request: Request) {
 
     const apiService = ServiceFactory.getSpotifyApiService(token.value);
     const playlists = await apiService.getRemainingPlaylists();
+    
+    const logger = ServiceFactory.getLoggerService();
+    const sizeStr = calculateDataSize(playlists);
+    const user = request.headers.get('x-user-id') || undefined;
+    logger.info(`[SpotifyPlaylistsAPI] Successfully fetched remaining ${playlists.length} playlists (${sizeStr})`, undefined, { user });
     
     return NextResponse.json(playlists);
   } catch (error: any) {

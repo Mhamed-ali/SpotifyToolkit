@@ -49,18 +49,7 @@ export default function NavLinks() {
       >
         Processing
       </Link>
-      <Link 
-        href={activeTab.startsWith('/results') ? '#' : '/results'} 
-        onClick={(e) => {
-          if (activeTab === '/processing') {
-            e.preventDefault();
-            window.dispatchEvent(new CustomEvent('request-cancel-processing', { detail: { target: '/results' } }));
-          }
-        }}
-        className={activeTab.startsWith('/results') ? 'text-[#1ED760]' : 'text-zinc-400 hover:text-zinc-200 transition-colors'}
-      >
-        Save Results
-      </Link>
+
       <span className="text-zinc-600 cursor-not-allowed" title="Coming soon">History</span>
       <span className="text-zinc-600 cursor-not-allowed" title="Coming soon">Settings</span>
     </nav>
