@@ -246,9 +246,9 @@ export default function ExtractionResults({
                           <p className={`text-sm truncate font-bold ${isSelected ? 'text-white' : 'text-zinc-300'}`}>
                             {finding.track.name}
                           </p>
-                          <div className="flex items-center justify-between gap-2 mt-1">
-                            <p className="text-zinc-500 text-xs truncate flex-1">
-                              {finding.track.artists?.map((a: any) => a.name).join(', ')} • <span className="text-[#1ED760]">{finding.reason}</span>
+                          <div className="flex items-start sm:items-center justify-between gap-2 mt-1">
+                            <p className="text-zinc-500 text-xs line-clamp-2 sm:truncate flex-1">
+                              {finding.track.artists?.map((a: any) => a.name).join(', ')} • {finding.reason}
                             </p>
                             {finding.track.external_urls?.spotify && (
                               <a 

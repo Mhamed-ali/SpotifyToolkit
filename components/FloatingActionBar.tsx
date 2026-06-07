@@ -22,13 +22,13 @@ export default function FloatingActionBar({ selectedCount, onAnalyze, onExtract 
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <button 
               onClick={onExtract}
-              className="px-8 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_0_15px_rgba(0,0,0,0.3)] hover:scale-105 active:scale-95 w-full sm:w-auto text-center"
+              className="px-4 sm:px-8 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_0_15px_rgba(0,0,0,0.3)] hover:scale-105 active:scale-95 w-full sm:w-auto text-center"
             >
               Extract Arabic Tracks
             </button>
             <button 
               onClick={onAnalyze}
-              className="px-8 py-2.5 bg-[#1ED760] hover:bg-[#1fdf64] text-black font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_0_15px_rgba(30,215,96,0.3)] hover:shadow-[0_0_25px_rgba(30,215,96,0.6)] hover:scale-105 active:scale-95 w-full sm:w-auto text-center"
+              className="px-4 sm:px-8 py-2.5 bg-[#1ED760] hover:bg-[#1fdf64] text-black font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_0_15px_rgba(30,215,96,0.3)] hover:shadow-[0_0_25px_rgba(30,215,96,0.6)] hover:scale-105 active:scale-95 w-full sm:w-auto text-center"
             >
               Analyze Playlists
             </button>
