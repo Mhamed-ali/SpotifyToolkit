@@ -17,3 +17,9 @@ The deletion logic (`app/api/spotify/remove/route.ts`) handles a major Spotify A
 - **Playlists**: Tracks must be deleted using `DELETE /v1/playlists/{id}/tracks` using their `uri` (spotify:track:123). Max 100 per request.
 - **Liked Songs**: Tracks must be deleted using `DELETE /v1/me/tracks` using their `id` (123). Max 50 per request.
 The implementation abstracts this quirk away from the UI.
+
+## 4. Arabic Extraction & Strict Mode
+The extraction engine (`lib/utils/arabicDetection.ts`) isolates Arabic tracks using regex, Franco-Arabic dictionaries, and Spotify genres.
+- **Strict Mode**: Filters out false positives by ignoring underlying Spotify genres and generic Arabic character matches on artist names. It relies strictly on track-title text, known Franco-Arabic words, and a curated whitelist of VIP Known Artists.
+- **Instant Filtering**: Tracks are cached locally in memory inside `useExtractEngine.ts`. When a user toggles Strict Mode at the end of a scan, the engine recalculates the filter instantly from memory without querying the Spotify API.
+- **Blacklisting**: Generic artist names like "Various Artists" and "فنانون متنوعون" are globally blacklisted to prevent massive compilation albums from pulling in false-positive English tracks.
