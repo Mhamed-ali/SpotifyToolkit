@@ -83,7 +83,7 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
         const trackQueue: any[] = [];
         let fetchOffset = 0;
         let completedStreams = 0;
-        const CONCURRENCY = 5;
+        const CONCURRENCY = 15;
 
         const fillQueue = async (streamId: number) => {
           while (fetchOffset < expectedTotal && active && !cancelledRef.current) {
