@@ -9,14 +9,16 @@ export interface AdvancedOptionsState {
   durationTolerance: number; // in seconds
   keepStrategy: KeepStrategy;
   scope: Scope;
+  strictArabicExtraction: boolean;
 }
 
 interface AdvancedOptionsProps {
   options: AdvancedOptionsState;
   onChange: (newOptions: AdvancedOptionsState) => void;
+  mode?: 'all' | 'dedupe-only' | 'arabic-only';
 }
 
-export default function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
+export default function AdvancedOptions({ options, onChange, mode = 'all' }: AdvancedOptionsProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   const handleUpdate = (key: keyof AdvancedOptionsState, value: any) => {
@@ -34,8 +36,15 @@ export default function AdvancedOptions({ options, onChange }: AdvancedOptionsPr
           <span className="text-white font-medium">Advanced Options</span>
           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#1ED760]/20 text-[#1ED760] uppercase tracking-wider">New</span>
           <span className="text-xs text-zinc-500 hidden sm:inline-block">
-            {options.matchCriteria === 'fuzzy' ? `Fuzzy • ±${options.durationTolerance}s • ` : 'Strict • '} 
-            Keep {options.keepStrategy} • {options.scope === 'cross' ? 'Cross-playlist' : 'Per-playlist'}
+            {mode !== 'arabic-only' && (
+              <>{options.matchCriteria === 'fuzzy' ? `Fuzzy • ±${options.durationTolerance}s • ` : 'Strict • '} 
+              Keep {options.keepStrategy} • {options.scope === 'cross' ? 'Cross-playlist' : 'Per-playlist'}
+              {mode === 'all' && ' • '}
+              </>
+            )}
+            {mode !== 'dedupe-only' && (
+              <>{options.strictArabicExtraction ? 'Strict Arabic' : 'Standard Arabic'}</>
+            )}
           </span>
         </div>
         <svg 
@@ -50,7 +59,10 @@ export default function AdvancedOptions({ options, onChange }: AdvancedOptionsPr
         <div className="p-5 border-t border-zinc-800 bg-zinc-900/50 animate-in slide-in-from-top-2 duration-200">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-y-6 gap-x-4 md:gap-4 md:divide-x divide-zinc-800">
             
-            {/* Match Criteria */}
+            {/* Dedupe Options */}
+            {mode !== 'arabic-only' && (
+              <>
+                {/* Match Criteria */}
             <div className="flex flex-col md:pr-4">
               <h4 className="text-white font-semibold text-xs sm:text-sm mb-3 sm:mb-4">Match Criteria</h4>
               <div className="flex items-center gap-2 sm:gap-3 mb-2">
@@ -130,6 +142,28 @@ export default function AdvancedOptions({ options, onChange }: AdvancedOptionsPr
                 Determines which version is pre-selected to keep.
               </p>
             </div>
+            </>
+            )}
+
+            {/* Strict Arabic Extraction */}
+            {mode !== 'dedupe-only' && (
+            <div className={`flex flex-col md:pr-4 col-span-2 md:col-span-4 ${mode === 'all' ? 'mt-2 md:mt-4 pt-4 md:pt-6 border-t border-zinc-800' : ''}`}>
+              <div className="flex items-start justify-between w-full">
+                <div>
+                  <h4 className="text-white font-semibold text-xs sm:text-sm mb-1 sm:mb-2">Strict Arabic Extraction</h4>
+                  <p className="text-[10px] sm:text-xs text-zinc-500 max-w-md">
+                    Exclude purely English songs by Arabic artists. Ignores artist's name characters and genres, relying only on Track Title or explicitly known artists.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => handleUpdate('strictArabicExtraction', !options.strictArabicExtraction)}
+                  className={`w-10 h-5 sm:w-12 sm:h-6 flex-shrink-0 rounded-full relative transition-colors ${options.strictArabicExtraction ? 'bg-[#1ED760]' : 'bg-zinc-700'}`}
+                >
+                  <div className={`w-4 h-4 sm:w-5 sm:h-5 bg-white rounded-full absolute top-0.5 transition-transform ${options.strictArabicExtraction ? 'translate-x-5 sm:translate-x-6' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+            </div>
+            )}
 
           </div>
         </div>

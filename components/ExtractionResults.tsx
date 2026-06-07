@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { SpotifyPlaylist } from "@/lib/types/spotify";
 
 export default function ExtractionResults({
@@ -27,6 +27,10 @@ export default function ExtractionResults({
   const [isCreating, setIsCreating] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedUris(new Set(extractedTracks.map(t => t.track?.uri).filter(Boolean)));
+  }, [extractedTracks]);
 
   const toggleSelection = (uri: string) => {
     const newSet = new Set(selectedUris);
@@ -157,18 +161,18 @@ export default function ExtractionResults({
       {/* Playlist Config */}
       <div className="bg-zinc-800/40 rounded-xl p-4 mb-6 border border-zinc-700/50">
         <label className="block text-sm font-medium text-zinc-300 mb-2">New Playlist Name</label>
-        <div className="flex gap-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
           <input 
             type="text" 
             value={playlistName}
             onChange={(e) => setPlaylistName(e.target.value)}
-            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#1ED760] transition-colors"
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 sm:py-2 text-white focus:outline-none focus:border-[#1ED760] transition-colors"
             placeholder="e.g., My Arabic Mix"
           />
           <button 
             onClick={handleCreatePlaylist}
             disabled={isCreating || selectedUris.size === 0}
-            className="px-6 py-2 bg-[#1ED760] text-black font-bold rounded-lg hover:bg-[#1fdf64] transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            className="px-6 py-3 sm:py-2 bg-[#1ED760] text-black font-bold rounded-lg hover:bg-[#1fdf64] transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {isCreating ? "Creating..." : "Create Playlist"}
           </button>
@@ -204,9 +208,9 @@ export default function ExtractionResults({
                 className="flex items-center justify-between cursor-pointer group mb-3 pb-2 border-b border-zinc-800"
                 onClick={() => toggleCollapse(plName)}
               >
-                <div className="flex items-center gap-3">
-                  <h4 className="text-white font-bold text-lg group-hover:text-[#1ED760] transition-colors">{plName}</h4>
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 flex-1 min-w-0 pr-2">
+                  <h4 className="text-white font-bold text-base sm:text-lg group-hover:text-[#1ED760] transition-colors truncate">{plName}</h4>
+                  <span className="text-[10px] sm:text-xs font-medium px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 w-fit whitespace-nowrap">
                     {selectedInPlaylist} / {tracks.length} Selected
                   </span>
                 </div>
@@ -242,9 +246,23 @@ export default function ExtractionResults({
                           <p className={`text-sm truncate font-bold ${isSelected ? 'text-white' : 'text-zinc-300'}`}>
                             {finding.track.name}
                           </p>
-                          <p className="text-zinc-500 text-xs truncate">
-                            {finding.track.artists?.map((a: any) => a.name).join(', ')} • <span className="text-[#1ED760]">{finding.reason}</span>
-                          </p>
+                          <div className="flex items-center justify-between gap-2 mt-1">
+                            <p className="text-zinc-500 text-xs truncate flex-1">
+                              {finding.track.artists?.map((a: any) => a.name).join(', ')} • <span className="text-[#1ED760]">{finding.reason}</span>
+                            </p>
+                            {finding.track.external_urls?.spotify && (
+                              <a 
+                                href={finding.track.external_urls.spotify} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="flex items-center gap-1.5 text-[10px] sm:text-xs font-medium text-zinc-400 hover:text-[#1ED760] transition-colors bg-zinc-800/80 px-2 py-1 rounded flex-shrink-0"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                Listen
+                              </a>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );

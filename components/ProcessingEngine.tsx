@@ -115,9 +115,11 @@ export default function ProcessingEngine({
               matchCriteria: 'strict',
               durationTolerance: 2,
               keepStrategy: 'oldest',
-              scope: 'cross'
+              scope: 'cross',
+              strictArabicExtraction: false
             }}
             setAdvancedOptions={setAdvancedOptions || (() => {})} 
+            mode="dedupe-only"
             onReturnToDashboard={() => {
               if (onCancel) onCancel();
               else window.location.href = '/';

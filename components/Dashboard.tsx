@@ -33,7 +33,8 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
     matchCriteria: 'fuzzy',
     durationTolerance: 2,
     keepStrategy: 'oldest',
-    scope: 'per'
+    scope: 'per',
+    strictArabicExtraction: false
   });
   
   // SPA Routing State (0ms delay!)
@@ -101,6 +102,8 @@ export default function Dashboard({ initialPlaylists, userId }: { initialPlaylis
       <ExtractEngine 
         initialPlaylists={processingPlaylists}
         userId={userId}
+        advancedOptions={advancedOptions}
+        setAdvancedOptions={setAdvancedOptions}
         onCancel={() => {
           setIsExtractMode(false);
           window.dispatchEvent(new CustomEvent('spa-navigate', { detail: { tab: '/' } }));

@@ -109,7 +109,7 @@ export class SpotifyApiService implements ISpotifyApiService {
     // For regular playlists, we only need specific fields to save bandwidth. For liked songs, fields param is not supported.
     const url = isLikedSongs 
       ? `https://api.spotify.com/v1/me/tracks?offset=${offset}&limit=${actualLimit}`
-      : `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=${actualLimit}&fields=items(added_at,track(id,name,uri,duration_ms,external_urls,artists(name,id),album(name,id))),total,next,offset,limit`;
+      : `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=${actualLimit}&fields=items(added_at,track(id,name,uri,duration_ms,external_urls,artists(name,id),album(name,id,images))),total,next,offset,limit`;
     
     const response = await fetch(url, {
       headers: {

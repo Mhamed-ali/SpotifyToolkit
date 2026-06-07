@@ -7,6 +7,7 @@ interface DuplicateReviewProps {
   clusters: TrackCluster[];
   advancedOptions: AdvancedOptionsState;
   setAdvancedOptions: (opts: AdvancedOptionsState) => void;
+  mode?: 'all' | 'dedupe-only' | 'arabic-only';
   onReturnToDashboard: () => void;
 }
 
@@ -14,6 +15,7 @@ export default function DuplicateReview({
   clusters, 
   advancedOptions, 
   setAdvancedOptions, 
+  mode,
   onReturnToDashboard 
 }: DuplicateReviewProps) {
   // Store user's selected keep actions per cluster. Array of selected indices.
@@ -206,7 +208,11 @@ export default function DuplicateReview({
         </div>
       )}
 
-      <AdvancedOptions options={advancedOptions} onChange={setAdvancedOptions} />
+      <AdvancedOptions 
+        options={advancedOptions} 
+        onChange={setAdvancedOptions} 
+        mode={mode}
+      />
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl">
         <div className="p-4 sm:p-6 border-b border-zinc-800">

@@ -6,14 +6,19 @@ import { SpotifyPlaylist } from "@/lib/types/spotify";
 import { useExtractEngine } from "@/hooks/useExtractEngine";
 import ExtractionResults from "./ExtractionResults";
 import ProcessingQueue from "./ProcessingQueue";
+import AdvancedOptions, { AdvancedOptionsState } from "./AdvancedOptions";
 
 export default function ExtractEngine({ 
   initialPlaylists,
   userId,
+  advancedOptions,
+  setAdvancedOptions,
   onCancel
 }: { 
   initialPlaylists: SpotifyPlaylist[], 
   userId: string,
+  advancedOptions?: AdvancedOptionsState,
+  setAdvancedOptions?: (opts: AdvancedOptionsState) => void,
   onCancel?: () => void
 }) {
   const {
@@ -25,8 +30,13 @@ export default function ExtractEngine({
     recentFindings,
     statusText,
     currentPass,
+    fetchedTracksCount,
+    totalTracksToFetch,
+    fetchedArtistsCount,
+    totalArtistsToFetch,
+    processedTracksCount,
     cancelProcessing,
-  } = useExtractEngine(initialPlaylists, userId);
+  } = useExtractEngine(initialPlaylists, userId, advancedOptions);
 
   // Custom Modal State
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -51,23 +61,32 @@ export default function ExtractEngine({
     };
   }, [isFinished, onCancel]);
 
-  const totalTracks = initialPlaylists.reduce((acc, p) => acc + (p.tracks?.total || 0), 0);
-  const previousPlaylistsTracks = initialPlaylists.slice(0, currentPlaylistIndex).reduce((acc, p) => acc + (p.tracks?.total || 0), 0);
+  const [maxPercentage, setMaxPercentage] = useState(0);
+
+  let currentPercentage = 0;
+  if (isFinished) {
+    currentPercentage = 100;
+  } else if (totalTracksToFetch > 0) {
+    const trackP = (fetchedTracksCount / totalTracksToFetch) * 80;
+    const artistP = totalArtistsToFetch === 0 ? 0 : (fetchedArtistsCount / totalArtistsToFetch) * 20;
+    currentPercentage = Math.floor(trackP + artistP);
+  }
+
+  useEffect(() => {
+    if (currentPercentage > maxPercentage) {
+      setMaxPercentage(currentPercentage);
+    }
+  }, [currentPercentage, maxPercentage]);
+
+  const percentage = isFinished ? 100 : maxPercentage;
+
   const currentPlaylist = initialPlaylists[currentPlaylistIndex] || initialPlaylists[0];
   const queuePlaylists = initialPlaylists.slice(currentPlaylistIndex + 1);
-  
-  let currentPlaylistWork = 0;
-  if (currentPass === 1) currentPlaylistWork = currentTrackIndex;
-  if (currentPass === 2) currentPlaylistWork = currentPlaylist?.tracks?.total || 0;
-  if (currentPass === 3) currentPlaylistWork = (currentPlaylist?.tracks?.total || 0) + currentTrackIndex;
-
-  const totalCompletedWork = (previousPlaylistsTracks * 2) + currentPlaylistWork;
-  const percentage = isFinished ? 100 : (totalTracks === 0 ? 0 : Math.floor((totalCompletedWork / (totalTracks * 2)) * 100));
-  
-  const trueScannedTracks = previousPlaylistsTracks + (currentPass >= 2 ? (currentPlaylist?.tracks?.total || 0) : currentTrackIndex);
+  const trueScannedTracks = processedTracksCount;
+  const totalTracks = totalTracksToFetch;
 
   return (
-    <div className="w-full max-w-5xl mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <div className="w-full max-w-5xl mx-auto pt-4 pb-24 sm:py-8 px-2 sm:px-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
       
       {/* Header */}
       <div className="text-center mb-8 sm:mb-12">
@@ -101,7 +120,18 @@ export default function ExtractEngine({
           </div>
         </div>
 
-        {/* Current State */}
+        {/* Advanced Options Bar */}
+        {isFinished && advancedOptions && setAdvancedOptions && (
+          <div className="mt-8 mb-8">
+            <AdvancedOptions 
+              options={advancedOptions} 
+              onChange={setAdvancedOptions} 
+              mode="arabic-only" 
+            />
+          </div>
+        )}
+
+        {/* Main Content Area */}
         {!isFinished ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 relative mb-8">
             <div className="bg-zinc-800/60 rounded-xl p-4 sm:p-5 flex flex-col">
@@ -123,9 +153,6 @@ export default function ExtractEngine({
                 <div className="min-w-0">
                   <p className="text-white font-bold text-sm sm:text-base truncate mb-0.5 sm:mb-1">
                     {currentPlaylist?.name || 'Loading...'}
-                  </p>
-                  <p className="text-zinc-400 text-xs mt-0 sm:mt-0.5">
-                    Pass {currentPass}/3 • Track {currentTrackIndex} / {currentPlaylist?.tracks?.total || 0}
                   </p>
                 </div>
               </div>
