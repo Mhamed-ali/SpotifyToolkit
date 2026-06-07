@@ -79,15 +79,20 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
         }
 
         let hasMore = true;
-        // --- SEQUENTIAL FETCH MODEL ---
+        // --- PARALLEL FETCH MODEL ---
         const trackQueue: any[] = [];
         let fetchOffset = 0;
+        let completedStreams = 0;
+        const CONCURRENCY = 5;
 
-        const fillQueue = async () => {
+        const fillQueue = async (streamId: number) => {
           while (fetchOffset < expectedTotal && active && !cancelledRef.current) {
+            const currentOffset = fetchOffset;
             const maxLimit = playlist.id === 'liked-songs' ? 50 : 100;
-            const limit = Math.min(maxLimit, expectedTotal - fetchOffset);
+            const limit = Math.min(maxLimit, expectedTotal - currentOffset);
             if (limit <= 0) break;
+
+            fetchOffset += limit;
 
             let retries = 5;
             let success = false;
@@ -101,13 +106,13 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
                 if (reqId) headers['x-request-id'] = reqId;
                 if (userId) headers['x-user-id'] = encodeURIComponent(userId);
 
-                const res = await fetch(`/api/spotify/tracks?playlistId=${encodeURIComponent(playlist.id)}&offset=${fetchOffset}&limit=${limit}&streamId=1`, { 
+                const res = await fetch(`/api/spotify/tracks?playlistId=${encodeURIComponent(playlist.id)}&offset=${currentOffset}&limit=${limit}&streamId=${streamId}`, { 
                   signal,
                   headers
                 });
                 if (!res.ok) {
                   if (res.status === 429 || res.status >= 500) {
-                    const delay = (6 - retries) * 3000; // Exponential-ish backoff: 3s, 6s, 9s...
+                    const delay = (6 - retries) * 3000;
                     await new Promise(r => setTimeout(r, delay));
                     retries--;
                     continue;
@@ -119,36 +124,31 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
                 const tracks = data.items || [];
                 trackQueue.push(...tracks);
                 
-                // Spotify API is sometimes buggy and omits 'next' even when there are more tracks. 
-                // We strictly rely on tracks.length === 0 to know when we are truly at the end.
-                if (tracks.length === 0) {
-                  fetchOffset = 9999999; // Break outer loop
-                } else {
-                  fetchOffset += limit;
-                  // Throttle requests to avoid triggering Spotify's 429 Rate Limit (similar to ExtractEngine)
-                  await new Promise(r => setTimeout(r, 300));
-                }
-                
                 success = true;
                 break;
               } catch (err: any) {
                 lastError = err;
                 if (err.name === 'AbortError' || !active || cancelledRef.current) break;
-                console.error(`[fetchChunk] Error at offset ${fetchOffset}:`, err);
+                console.error(`[Stream ${streamId}] Error at offset ${currentOffset}:`, err);
                 retries--;
                 if (retries > 0) await new Promise(r => setTimeout(r, 2000));
               }
             }
 
             if (!success && active && !cancelledRef.current) {
-              clientLogger.error(`Failed to fetch chunk at offset ${fetchOffset} after 3 retries.`, lastError?.message || lastError);
-              break; // Stop fetching this playlist if completely failed
+              clientLogger.error(`[Stream ${streamId}] Failed to fetch chunk at offset ${currentOffset} after 5 retries.`, lastError?.message || lastError);
+              break; 
             }
           }
-          hasMore = false;
+          completedStreams++;
+          if (completedStreams === CONCURRENCY) {
+            hasMore = false;
+          }
         };
 
-        fillQueue();
+        for (let s = 1; s <= CONCURRENCY; s++) {
+          fillQueue(s);
+        }
 
         let processOffset = 0;
         while ((hasMore || trackQueue.length > 0) && active && !cancelledRef.current) {
