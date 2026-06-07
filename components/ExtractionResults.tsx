@@ -247,8 +247,8 @@ export default function ExtractionResults({
                             {finding.track.name}
                           </p>
                           <div className="flex items-start sm:items-center justify-between gap-2 mt-1">
-                            <p className="text-zinc-500 text-xs line-clamp-2 sm:truncate flex-1">
-                              {finding.track.artists?.map((a: any) => a.name).join(', ')} • {finding.reason}
+                            <p className="text-zinc-500 text-xs whitespace-normal break-words flex-1">
+                              {finding.track.artists?.map((a: any) => a.name).join(', ')} • <span className="text-[#1ED760]">{finding.reason}</span>
                             </p>
                             {finding.track.external_urls?.spotify && (
                               <a 
