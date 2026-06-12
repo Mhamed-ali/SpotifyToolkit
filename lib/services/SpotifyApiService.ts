@@ -234,7 +234,12 @@ export class SpotifyApiService implements ISpotifyApiService {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to create playlist: ${response.statusText}`);
+      let errorDetails = response.statusText;
+      try {
+        const errBody = await response.json();
+        errorDetails = errBody.error?.message || JSON.stringify(errBody);
+      } catch (e) {}
+      throw new Error(`Failed to create playlist: ${response.status} - ${errorDetails}`);
     }
 
     return response.json();
@@ -258,7 +263,12 @@ export class SpotifyApiService implements ISpotifyApiService {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to add tracks to playlist ${playlistId}: ${response.statusText}`);
+        let errorDetails = response.statusText;
+        try {
+          const errBody = await response.json();
+          errorDetails = errBody.error?.message || JSON.stringify(errBody);
+        } catch (e) {}
+        throw new Error(`Failed to add tracks to playlist ${playlistId}: ${response.status} - ${errorDetails}`);
       }
     }
   }
