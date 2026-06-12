@@ -13,10 +13,10 @@ import FloatingActionBar from "./FloatingActionBar";
 import AdvancedOptions, { AdvancedOptionsState } from "./AdvancedOptions";
 import { usePlaylists } from "@/hooks/usePlaylists";
 
-export default function Dashboard({ initialPlaylists, userId }: { initialPlaylists: SpotifyPlaylist[], userId: string }) {
+export default function Dashboard({ initialPlaylists, userId, userDisplayName }: { initialPlaylists: SpotifyPlaylist[], userId: string, userDisplayName: string }) {
   // Set User Context in Logger synchronously so all hooks have access immediately
-  if (userId && clientLogger.getLoggerUser() !== userId) {
-    clientLogger.setLoggerUser(userId);
+  if (userDisplayName && clientLogger.getLoggerUser() !== userDisplayName) {
+    clientLogger.setLoggerUser(userDisplayName);
   }
 
   // Use custom hook to handle background playlist fetching
