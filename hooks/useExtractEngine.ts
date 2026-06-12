@@ -55,6 +55,7 @@ export function useExtractEngine(initialPlaylists: SpotifyPlaylist[], userId: st
       }
 
       if (!active || isCancelled.current) return;
+      const startTime = performance.now();
 
       const allFoundTracks: any[] = [];
       const pendingArtists = new Set<string>();
@@ -339,6 +340,11 @@ export function useExtractEngine(initialPlaylists: SpotifyPlaylist[], userId: st
       } else {
         setStatusText('No Arabic tracks found.');
       }
+
+      const endTime = performance.now();
+      const timeMs = Math.round(endTime - startTime);
+      const memKB = (performance as any).memory ? Math.round((performance as any).memory.usedJSHeapSize / 1024) : 0;
+      clientLogger.info(`Performance Metrics: Arabic Extraction completed in ${timeMs}ms. Tracks Processed: ${globalProcessedTracks}. JS Heap: ~${memKB} KB.`);
 
       setIsFinished(true);
     }

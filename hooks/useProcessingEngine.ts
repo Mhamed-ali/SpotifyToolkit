@@ -61,6 +61,7 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
     setRecentFindings([]);
 
     const runProcessingLoop = async () => {
+      const startTime = performance.now();
       const allInstances: TrackInstance[] = [];
       let globalScannedTracks = 0;
 
@@ -192,6 +193,12 @@ export function useProcessingEngine(initialPlaylists: SpotifyPlaylist[], advance
       if (active && !cancelledRef.current) {
         // Final flush
         setDownloadedTracks([...allInstances]);
+        
+        const endTime = performance.now();
+        const timeMs = Math.round(endTime - startTime);
+        const memKB = (performance as any).memory ? Math.round((performance as any).memory.usedJSHeapSize / 1024) : 0;
+        clientLogger.info(`Performance Metrics: Playlist Processing completed in ${timeMs}ms. Tracks Processed: ${globalScannedTracks}. JS Heap: ~${memKB} KB.`);
+
         setIsFinished(true);
       }
     };
