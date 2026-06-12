@@ -9,6 +9,25 @@ export const clientLogger = {
   getLoggerUser: () => globalUser,
   setLoggerRequestId: (reqId: string) => { globalReqId = reqId; },
   getLoggerRequestId: () => globalReqId,
+  startPerformanceTimer: (operationName: string) => {
+    const startTime = performance.now();
+    return {
+      end: (metrics?: Record<string, any>) => {
+        const endTime = performance.now();
+        const timeMs = Math.round(endTime - startTime);
+        const memKB = (performance as any).memory ? Math.round((performance as any).memory.usedJSHeapSize / 1024) : 0;
+        
+        let msg = `Performance Metrics: ${operationName} completed in ${timeMs}ms.`;
+        if (metrics) {
+          const metricStr = Object.entries(metrics).map(([k, v]) => `${k}: ${v}`).join(', ');
+          msg += ` ${metricStr}.`;
+        }
+        msg += ` JS Heap: ~${memKB} KB.`;
+        
+        clientLogger.info(msg);
+      }
+    };
+  }
 };
 const log = (level: string, message: string, details?: any, source?: string, immediate?: boolean) => {
   // Always log to the browser console for immediate visibility
