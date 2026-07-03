@@ -8,7 +8,7 @@ Version 2.0 introduces our state-of-the-art **Duplicate Processing Engine**, fea
 
 ## 🌐 Live Demo
 Version 0.2 is currently deployed and running live on an Oracle VM instance.
-**Try it here:** [https://toolify.ddns.net/](https://toolify.ddns.net/)
+**Try it here:** [https://toolify.ddns.net/](https://toolify.ddns.net/) *(Note: If you need access, please contact me.)*
 
 ---
 
