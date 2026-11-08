@@ -1,66 +1,13 @@
 import React, { useMemo } from 'react';
 import '../App.css';
+import { calculateTimelineStats } from '../services/analysis.utils';
 
 const TimelineAnalysis = ({ tracks, onBack }) => {
+    const { years, decades, oldest, newest, totalWithDate } = useMemo(
+        () => calculateTimelineStats(tracks),
+        [tracks]
+    );
 
-    const { years, decades, oldest, newest, totalWithDate } = useMemo(() => {
-        const yearCounts = {};
-        const decadeCounts = {};
-        let minDate = new Date();
-        let maxDate = new Date(0);
-        let oldestTrack = null;
-        let newestTrack = null;
-        let count = 0;
-
-        tracks.forEach(item => {
-            if (!item.track || !item.track.album || !item.track.album.release_date) return;
-
-            const dateStr = item.track.album.release_date;
-            const year = parseInt(dateStr.substring(0, 4));
-
-            if (isNaN(year)) return;
-
-            count++;
-
-            // Year Counts
-            yearCounts[year] = (yearCounts[year] || 0) + 1;
-
-            // Decade Counts
-            const decade = Math.floor(year / 10) * 10;
-            decadeCounts[decade] = (decadeCounts[decade] || 0) + 1;
-
-            // Extremes
-            const date = new Date(dateStr);
-            if (date < minDate) {
-                minDate = date;
-                oldestTrack = item.track;
-            }
-            if (date > maxDate) {
-                maxDate = date;
-                newestTrack = item.track;
-            }
-        });
-
-        // Fill in missing years for the chart range if sparse? 
-        // For now, let's just sort the existing years
-        const sortedYears = Object.entries(yearCounts)
-            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-            .map(([year, count]) => ({ year, count }));
-
-        const sortedDecades = Object.entries(decadeCounts)
-            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-            .map(([decade, count]) => ({ decade, count }));
-
-        return {
-            years: sortedYears,
-            decades: sortedDecades,
-            oldest: oldestTrack,
-            newest: newestTrack,
-            totalWithDate: count
-        };
-    }, [tracks]);
-
-    // Find max count for scaling charts
     const maxYearCount = useMemo(() => Math.max(...years.map(y => y.count), 0), [years]);
 
     if (!totalWithDate) {
@@ -74,7 +21,6 @@ const TimelineAnalysis = ({ tracks, onBack }) => {
 
     return (
         <div className="timeline-analysis-container" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease-out', maxWidth: '100%' }}>
-            {/* Header */}
             <div className="analysis-header" style={{ display: 'flex', alignItems: 'center', marginBottom: '2rem' }}>
                 <button
                     onClick={onBack}
@@ -87,15 +33,13 @@ const TimelineAnalysis = ({ tracks, onBack }) => {
                 <h2 className="title-gradient" style={{ margin: 0 }}>Timeline Analysis</h2>
             </div>
 
-            {/* Time Capsule Section */}
             <div className="time-capsule-grid" style={{
                 display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', marginBottom: '3rem', width: '100%'
             }}>
-                <TrackCard title="Oldest Track" track={oldest} label="Vintage Find" />
-                <TrackCard title="Newest Track" track={newest} label="Fresh Drop" />
+                <TrackCard title="Oldest Track" track={oldest} />
+                <TrackCard title="Newest Track" track={newest} />
             </div>
 
-            {/* Timeline Chart */}
             <div className="glass-card" style={{ padding: '2rem', marginBottom: '2rem', width: '100%', maxWidth: '100%' }}>
                 <h3 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <span>📅</span> Release Year Distribution
@@ -113,7 +57,7 @@ const TimelineAnalysis = ({ tracks, onBack }) => {
                                 title={`${year}: ${count} tracks`}
                                 style={{
                                     width: '100%',
-                                    height: `${(count / maxYearCount) * 150}px`, // Max height 150px
+                                    height: `${(count / maxYearCount) * 150}px`,
                                     background: 'var(--accent)',
                                     borderRadius: '4px 4px 0 0',
                                     opacity: 0.8,
@@ -128,7 +72,6 @@ const TimelineAnalysis = ({ tracks, onBack }) => {
                 </div>
             </div>
 
-            {/* Decade Stats */}
             <div className="glass-card" style={{ padding: '2rem', width: '100%', maxWidth: '100%' }}>
                 <h3 style={{ marginBottom: '1rem' }}>Decade Breakdown</h3>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
@@ -142,12 +85,11 @@ const TimelineAnalysis = ({ tracks, onBack }) => {
                     ))}
                 </div>
             </div>
-
         </div>
     );
 };
 
-const TrackCard = ({ title, track, label }) => {
+const TrackCard = ({ title, track }) => {
     if (!track) return null;
     const year = track.album.release_date ? track.album.release_date.split('-')[0] : 'Unknown';
     const image = track.album.images && track.album.images.length > 0 ? track.album.images[0].url : null;

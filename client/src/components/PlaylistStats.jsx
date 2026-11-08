@@ -1,60 +1,13 @@
 import React, { useMemo } from 'react';
 import '../App.css';
+import { calculatePlaylistStats } from '../services/analysis.utils';
 
 const PlaylistStats = ({ tracks, onBack }) => {
-
-    const stats = useMemo(() => {
-        let totalDuration = 0;
-        let explicitCount = 0;
-        let popularitySum = 0;
-        let validPopCount = 0;
-        const popBuckets = new Array(10).fill(0); // 0-10, 10-20, ... 90-100
-
-        tracks.forEach(item => {
-            const t = item.track;
-            if (!t) return;
-
-            // Duration
-            totalDuration += t.duration_ms || 0;
-
-            // Explicit
-            if (t.explicit) explicitCount++;
-
-            // Popularity
-            if (typeof t.popularity === 'number') {
-                popularitySum += t.popularity;
-                validPopCount++;
-
-                // Bucket
-                const bucketIndex = Math.min(Math.floor(t.popularity / 10), 9);
-                popBuckets[bucketIndex]++;
-            }
-        });
-
-        const totalTracks = tracks.length || 1;
-        const avgPopularity = validPopCount > 0 ? Math.round(popularitySum / validPopCount) : 0;
-        const explicitPercent = Math.round((explicitCount / totalTracks) * 100);
-
-        // Format total duration
-        const hours = Math.floor(totalDuration / 3600000);
-        const minutes = Math.floor((totalDuration % 3600000) / 60000);
-        const durationStr = hours > 0 ? `${hours} hr ${minutes} min` : `${minutes} min`;
-
-        return {
-            totalTracks,
-            durationStr,
-            explicitCount,
-            explicitPercent,
-            avgPopularity,
-            popBuckets
-        };
-    }, [tracks]);
-
+    const stats = useMemo(() => calculatePlaylistStats(tracks), [tracks]);
     const maxPopBucket = Math.max(...stats.popBuckets, 0) || 1;
 
     return (
         <div className="playlist-stats-container" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease-out', maxWidth: '100%' }}>
-            {/* Header */}
             <div className="analysis-header" style={{ display: 'flex', alignItems: 'center', marginBottom: '2rem' }}>
                 <button
                     onClick={onBack}
@@ -67,7 +20,6 @@ const PlaylistStats = ({ tracks, onBack }) => {
                 <h2 className="title-gradient" style={{ margin: 0 }}>Playlist Stats</h2>
             </div>
 
-            {/* Overview Grid */}
             <div className="stats-grid" style={{
                 display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '3rem'
             }}>
@@ -92,7 +44,6 @@ const PlaylistStats = ({ tracks, onBack }) => {
                 />
             </div>
 
-            {/* Popularity Chart */}
             <div className="glass-card" style={{ padding: '2rem', width: '100%', maxWidth: '100%' }}>
                 <h3 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <span>📈</span> Popularity Distribution
@@ -127,7 +78,6 @@ const PlaylistStats = ({ tracks, onBack }) => {
                     Popularity Score (0-100)
                 </div>
             </div>
-
         </div>
     );
 };

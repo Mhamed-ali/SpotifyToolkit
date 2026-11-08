@@ -1,19 +1,14 @@
 {
   "name": "spotify30",
   "version": "1.0.0",
-  "description": "Spotify Toolkit WebApp",
+  "description": "Spotify & Anghami Toolkit WebApp",
   "scripts": {
     "install:all": "cd server && npm install && cd ../client && npm install",
     "server": "cd server && npm start",
     "client": "cd client && npm run dev",
+    "test": "cd server && npm test && cd ../client && npm test",
     "dev": "echo \"Run 'npm run server' and 'npm run client' in separate terminals\""
   },
   "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "server": "^1.0.42"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-basic-ssl": "^2.1.4"
-  }
+  "license": "ISC"
 }

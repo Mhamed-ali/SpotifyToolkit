@@ -1,7 +1,8 @@
-clean up the export option gui
-clean up the gui 
-make the button visible (the text and back ground are black)
-creat a bat to run the server [done]
-list the avilable featuers 
-liked songs doesnt have a logo when opened
-add mobile support 
+1: clean up the export option gui [done]
+2: clean up the gui [done]
+3: make the button visible (the text and back ground are black) [done]
+4: creat a bat to run the server [done]
+5: list the avilable featuers [done]
+6: liked songs doesnt have a logo when opened [done]
+7: add mobile support [done]
+8: add Anghami integration & SOLID/Clean Code architecture [done]

@@ -1,63 +1,11 @@
 import React, { useState } from 'react';
 import '../App.css';
+import { ANALYSIS_MODULES } from '../config/analysisRegistry';
 
 const AnalysisModal = ({ isOpen, onClose, onRun }) => {
-    // State: { [cardId]: [subOptionId1, subOptionId2] }
-    // If a key exists, the card is selected. The value is the list of active sub-options.
     const [selections, setSelections] = useState({});
 
     if (!isOpen) return null;
-
-    const options = [
-        {
-            id: 'vibe',
-            icon: '🌊',
-            title: 'Vibe Check',
-            desc: 'Mood, Energy, and Danceability',
-            subOptions: [
-                { id: 'mood', label: 'Mood' },
-                { id: 'energy', label: 'Energy' },
-                { id: 'dance', label: 'Danceability' }
-            ]
-        },
-        {
-            id: 'timeline',
-            icon: '⏳',
-            title: 'Timeline',
-            desc: 'Era breakdown and years',
-            subOptions: []
-        },
-        {
-            id: 'artists',
-            icon: '🎤',
-            title: 'Artist Breakdown',
-            desc: 'Top artists and collaborations',
-            subOptions: [
-                { id: 'collabs', label: 'Collabs' }
-            ]
-        },
-        {
-            id: 'cleaner',
-            icon: '🧹',
-            title: 'Deep Analysis',
-            desc: 'Deduplicate & Filter',
-            subOptions: [
-                { id: 'duplicates', label: 'Duplicates' },
-                { id: 'advanced_filter', label: 'Advanced Filter' }
-            ]
-        },
-        {
-            id: 'stats',
-            icon: '📈',
-            title: 'Playlist Stats',
-            desc: 'Length, scores, and more',
-            subOptions: [
-                { id: 'duration', label: 'Duration' },
-                { id: 'explicit', label: 'Explicit %' },
-                { id: 'popularity', label: 'Popularity' }
-            ]
-        }
-    ];
 
     const toggleCard = (option) => {
         setSelections(prev => {
@@ -65,7 +13,6 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
             if (next[option.id]) {
                 delete next[option.id];
             } else {
-                // Select with all sub-options enabled by default
                 next[option.id] = option.subOptions.map(so => so.id);
             }
             return next;
@@ -73,17 +20,13 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
     };
 
     const toggleSubOption = (cardId, subId, e) => {
-        e.stopPropagation(); // Prevent card toggle
+        e.stopPropagation();
         setSelections(prev => {
-            const currentSubOptions = prev[cardId] || []; // Should exist if visible
+            const currentSubOptions = prev[cardId] || [];
             const isActive = currentSubOptions.includes(subId);
-
-            let newSubOptions;
-            if (isActive) {
-                newSubOptions = currentSubOptions.filter(id => id !== subId);
-            } else {
-                newSubOptions = [...currentSubOptions, subId];
-            }
+            const newSubOptions = isActive
+                ? currentSubOptions.filter(id => id !== subId)
+                : [...currentSubOptions, subId];
 
             return {
                 ...prev,
@@ -94,7 +37,7 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
 
     const handleRun = () => {
         onRun(selections);
-        setSelections({}); // Reset
+        setSelections({});
     };
 
     const selectedCount = Object.keys(selections).length;
@@ -111,8 +54,8 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
                 </p>
 
                 <div className="analysis-options-grid">
-                    {options.map(option => {
-                        const isSelected = !!selections[option.id];
+                    {ANALYSIS_MODULES.map(option => {
+                        const isSelected = Boolean(selections[option.id]);
                         const activeSubOptions = selections[option.id] || [];
 
                         return (
@@ -125,7 +68,7 @@ const AnalysisModal = ({ isOpen, onClose, onRun }) => {
                                 <h3 className="option-title">{option.title}</h3>
                                 <p className="option-desc">{option.desc}</p>
 
-                                {isSelected && (
+                                {isSelected && option.subOptions.length > 0 && (
                                     <div className="analysis-sub-options">
                                         {option.subOptions.map(sub => (
                                             <span

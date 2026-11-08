@@ -1,13 +1,24 @@
 import React from 'react';
 import '../App.css';
+import { PLAYLIST_IDS, PlaylistModel } from '../models/Playlist';
 
-const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSongsCount, isLoading, onManualPlaylist, onMultiAnalyze }) => {
+const PlaylistsPage = ({
+    playlists,
+    onBack,
+    onLogout,
+    onPlaylistClick,
+    likedSongsCount,
+    isLoading,
+    onManualPlaylist,
+    onMultiAnalyze,
+    providerName = 'Spotify'
+}) => {
     const [isSelectionMode, setIsSelectionMode] = React.useState(false);
     const [selectedPlaylists, setSelectedPlaylists] = React.useState(new Set());
 
     const toggleSelectionMode = () => {
         setIsSelectionMode(!isSelectionMode);
-        setSelectedPlaylists(new Set()); // Clear on toggle
+        setSelectedPlaylists(new Set());
     };
 
     const handleCardClick = (playlist) => {
@@ -25,40 +36,39 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
     };
 
     const handleAnalyze = () => {
-        const selected = playlists.filter(p => selectedPlaylists.has(p.id));
-        if (selectedPlaylists.has('LIKED_SONGS')) {
-            selected.push({
-                id: 'LIKED_SONGS',
-                name: 'Liked Songs',
-                tracks: { total: likedSongsCount }
-            });
+        const selected = (playlists || []).filter(p => selectedPlaylists.has(p.id));
+        if (selectedPlaylists.has(PLAYLIST_IDS.LIKED_SONGS)) {
+            selected.push(PlaylistModel.createLikedSongs(likedSongsCount));
         }
         onMultiAnalyze(selected);
     };
+
+    const totalSelectable = (playlists?.length || 0) + (likedSongsCount ? 1 : 0);
+
     const toggleSelectAll = () => {
-        if (selectedPlaylists.size === (playlists.length + (likedSongsCount ? 1 : 0))) {
+        if (selectedPlaylists.size === totalSelectable) {
             setSelectedPlaylists(new Set());
         } else {
-            const allIds = playlists.map(p => p.id);
-            if (likedSongsCount) allIds.push('LIKED_SONGS');
+            const allIds = (playlists || []).map(p => p.id);
+            if (likedSongsCount) allIds.push(PLAYLIST_IDS.LIKED_SONGS);
             setSelectedPlaylists(new Set(allIds));
         }
     };
 
-    if ((!playlists && isLoading) || (!playlists && !likedSongsCount && isLoading)) { // Simple loading check
+    if ((!playlists && isLoading) || (!playlists && !likedSongsCount && isLoading)) {
         return (
             <div className="playlists-container">
                 <div className="playlists-header">
-                    <h2>Loading Library...</h2>
+                    <h2>Loading {providerName} Library...</h2>
                 </div>
                 <div className="status-box">Fetching your playlists...</div>
             </div>
-        )
+        );
     }
 
     return (
         <div className="playlists-container">
-            <div className="playlists-header" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center' }}>
+            <div className="playlists-header playlists-header-grid">
                 <div>
                     <button className="spotify-btn action-btn-outline" onClick={onBack}>
                         ← Profile
@@ -66,17 +76,26 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
                 </div>
 
                 <h2 style={{ margin: 0, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    {isSelectionMode ? `${selectedPlaylists.size} Selected` : 'Your Playlists'}
+                    {isSelectionMode ? `${selectedPlaylists.size} Selected` : `Your ${providerName} Playlists`}
                 </h2>
 
-                <div className="header-actions" style={{ justifyContent: 'flex-end', gap: '1rem' }}>
+                <div className="header-actions" style={{ justifyContent: 'flex-end', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    {!isSelectionMode && onManualPlaylist && (
+                        <button
+                            className="spotify-btn action-btn-outline"
+                            onClick={onManualPlaylist}
+                            title={`Load any public ${providerName} playlist by link or ID`}
+                        >
+                            🔗 Load by Link
+                        </button>
+                    )}
                     {isSelectionMode && (
                         <button
                             className="spotify-btn action-btn-outline"
                             onClick={toggleSelectAll}
                             style={{ animation: 'fadeIn 0.2s' }}
                         >
-                            {selectedPlaylists.size === (playlists.length + (likedSongsCount ? 1 : 0)) ? 'Deselect All' : 'Select All'}
+                            {selectedPlaylists.size === totalSelectable ? 'Deselect All' : 'Select All'}
                         </button>
                     )}
                     {isSelectionMode && selectedPlaylists.size > 0 && (
@@ -96,7 +115,7 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
                             whiteSpace: 'nowrap'
                         }}
                     >
-                        {isSelectionMode ? 'Cancel' : 'Select Playlist'}
+                        {isSelectionMode ? 'Cancel' : 'Multi-Select'}
                     </button>
                     <button className="spotify-btn action-btn-outline logout-btn" onClick={onLogout}>
                         Log Out
@@ -107,20 +126,12 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
             <div className="playlists-grid">
                 {likedSongsCount !== null && (
                     <div
-                        className={`playlist-card clickable liked-songs-card ${isSelectionMode && selectedPlaylists.has('LIKED_SONGS') ? 'selected' : ''}`}
+                        className={`playlist-card clickable liked-songs-card ${isSelectionMode && selectedPlaylists.has(PLAYLIST_IDS.LIKED_SONGS) ? 'selected' : ''}`}
                         style={{
-                            border: isSelectionMode && selectedPlaylists.has('LIKED_SONGS') ? '2px solid var(--accent)' : '2px solid transparent',
-                            opacity: isSelectionMode && !selectedPlaylists.has('LIKED_SONGS') ? 0.7 : 1
+                            border: isSelectionMode && selectedPlaylists.has(PLAYLIST_IDS.LIKED_SONGS) ? '2px solid var(--accent)' : '2px solid transparent',
+                            opacity: isSelectionMode && !selectedPlaylists.has(PLAYLIST_IDS.LIKED_SONGS) ? 0.7 : 1
                         }}
-                        onClick={() => handleCardClick({
-                            id: 'LIKED_SONGS',
-                            name: 'Liked Songs',
-                            description: 'Your saved tracks',
-                            images: [],
-                            owner: { display_name: 'You' },
-                            tracks: { total: likedSongsCount },
-                            public: false
-                        })}
+                        onClick={() => handleCardClick(PlaylistModel.createLikedSongs(likedSongsCount))}
                     >
                         <div className="playlist-image-container liked-songs-image">
                             <span className="liked-heart">♥</span>
@@ -150,7 +161,7 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
                                     loading="lazy"
                                 />
                             ) : (
-                                <div className="playlist-image-placeholder"></div>
+                                <div className="playlist-image-placeholder">🎵</div>
                             )}
                         </div>
                         <div className="playlist-info">
@@ -159,13 +170,13 @@ const PlaylistsPage = ({ playlists, onBack, onLogout, onPlaylistClick, likedSong
                                 <span className={`privacy-badge ${playlist.public ? 'public' : 'private'}`}>
                                     {playlist.public ? 'Public' : 'Private'}
                                 </span>
-                                <p className="playlist-stats">{playlist.tracks.total} Tracks</p>
+                                <p className="playlist-stats">{playlist.tracks?.total || 0} Tracks</p>
                             </div>
                         </div>
                     </div>
                 ))}
             </div>
-        </div >
+        </div>
     );
 };
 

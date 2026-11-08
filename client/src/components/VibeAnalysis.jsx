@@ -1,9 +1,8 @@
 import React from 'react';
 import '../App.css';
+import { getVibeDescription } from '../services/analysis.utils';
 
 const VibeAnalysis = ({ stats, warning, onBack, trackCount }) => {
-
-    // Safety check
     if (!stats || typeof stats.energy === 'undefined') {
         return (
             <div className="flex-center" style={{ height: '50vh', flexDirection: 'column' }}>
@@ -12,16 +11,6 @@ const VibeAnalysis = ({ stats, warning, onBack, trackCount }) => {
             </div>
         );
     }
-
-    // Determine Logic textual description
-    const getVibeDescription = (s) => {
-        if (s.energy > 0.7 && s.danceability > 0.7) return "Total Party Starter 🎉";
-        if (s.energy > 0.8) return "High Octane ⚡";
-        if (s.valence < 0.3 && s.energy < 0.4) return "Sad Boi Hours 🌧️";
-        if (s.acousticness > 0.7) return "Campfire Vibes 🏕️";
-        if (s.danceability > 0.8) return "Club Banger 🕺";
-        return "Chill Mix ☕";
-    };
 
     return (
         <div className="vibe-analysis-container" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease-out' }}>
@@ -40,6 +29,9 @@ const VibeAnalysis = ({ stats, warning, onBack, trackCount }) => {
             <div className="vibe-summary glass-card" style={{ padding: '2rem', textAlign: 'center', marginBottom: '2rem' }}>
                 <h1 style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>{getVibeDescription(stats)}</h1>
                 <p style={{ color: 'var(--text-secondary)' }}>Based on {trackCount} tracks</p>
+                {warning && (
+                    <span style={{ fontSize: '0.8rem', color: '#ffb74d', marginTop: '0.5rem' }}>{warning}</span>
+                )}
             </div>
 
             <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>

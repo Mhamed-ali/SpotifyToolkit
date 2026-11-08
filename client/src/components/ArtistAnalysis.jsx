@@ -1,37 +1,30 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState } from 'react';
 import '../App.css';
 import TrackTable from './TrackTable';
+import { formatDuration, formatDate } from '../utils/formatters';
+import { calculateTopArtists, filterTracksByArtists } from '../services/analysis.utils';
+
+const TABLE_COLUMNS = {
+    index: true,
+    art: true,
+    title: true,
+    album: true,
+    dateAdded: false,
+    released: false,
+    popularity: false,
+    duration: true
+};
 
 const ArtistAnalysis = ({ tracks, settings, onBack }) => {
     const [visibleCount, setVisibleCount] = useState(20);
     const [selectedArtists, setSelectedArtists] = useState(new Set());
 
-    const topArtists = useMemo(() => {
-        if (!tracks || tracks.length === 0) return [];
+    const includeCollabs = Boolean(settings && settings.includes('collabs'));
 
-        const artistCounts = {};
-        const includeCollabs = settings && settings.includes('collabs');
-
-        tracks.forEach(item => {
-            if (!item.track || !item.track.artists) return;
-
-            if (includeCollabs) {
-                // Count every artist on the track
-                item.track.artists.forEach(artist => {
-                    artistCounts[artist.name] = (artistCounts[artist.name] || 0) + 1;
-                });
-            } else {
-                // Count primary artist only
-                const primaryArtist = item.track.artists[0].name;
-                artistCounts[primaryArtist] = (artistCounts[primaryArtist] || 0) + 1;
-            }
-        });
-
-        // Convert to array and sort
-        return Object.entries(artistCounts)
-            .map(([name, count]) => ({ name, count }))
-            .sort((a, b) => b.count - a.count);
-    }, [tracks, settings]);
+    const topArtists = useMemo(
+        () => calculateTopArtists(tracks, includeCollabs),
+        [tracks, includeCollabs]
+    );
 
     const maxCount = topArtists.length > 0 ? topArtists[0].count : 1;
     const visibleArtists = topArtists.slice(0, visibleCount);
@@ -46,47 +39,10 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
         setSelectedArtists(newSelected);
     };
 
-    // Filter tracks based on selection
-    const filteredTracks = useMemo(() => {
-        if (selectedArtists.size === 0) return [];
-        const includeCollabs = settings && settings.includes('collabs');
-
-        return tracks.filter(item => {
-            if (!item.track || !item.track.artists) return false;
-
-            if (includeCollabs) {
-                // Check if ANY of the selected artists are in the track's artists
-                return item.track.artists.some(a => selectedArtists.has(a.name));
-            } else {
-                // Check if the PRIMARY artist is selected
-                return selectedArtists.has(item.track.artists[0].name);
-            }
-        });
-    }, [tracks, selectedArtists, settings]);
-
-    // Helpers for TrackTable
-    const formatDuration = useCallback((ms) => {
-        const minutes = Math.floor(ms / 60000);
-        const seconds = ((ms % 60000) / 1000).toFixed(0);
-        return minutes + ":" + (seconds < 10 ? '0' : '') + seconds;
-    }, []);
-
-    const formatDate = useCallback((dateString) => {
-        if (!dateString) return '-';
-        return new Date(dateString).toLocaleDateString();
-    }, []);
-
-    // Simplified columns for analysis view
-    const tableColumns = {
-        index: true,
-        art: true,
-        title: true,
-        album: true,
-        dateAdded: false,
-        released: false,
-        popularity: false,
-        duration: true
-    };
+    const filteredTracks = useMemo(
+        () => filterTracksByArtists(tracks, selectedArtists, includeCollabs),
+        [tracks, selectedArtists, includeCollabs]
+    );
 
     return (
         <div className="analysis-container" style={{
@@ -97,7 +53,6 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
             boxSizing: 'border-box',
             animation: 'fadeIn 0.3s ease-out'
         }}>
-            {/* Header */}
             <div className="analysis-header" style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -106,23 +61,8 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
             }}>
                 <button
                     onClick={onBack}
-                    style={{
-                        background: 'rgba(255,255,255,0.1)',
-                        border: 'none',
-                        color: '#fff',
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: '50%',
-                        fontSize: '1.2rem',
-                        cursor: 'pointer',
-                        marginRight: '1rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        transition: 'background 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-                    onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                    className="circle-back-btn"
+                    title="Back"
                 >
                     ←
                 </button>
@@ -134,15 +74,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                 </div>
             </div>
 
-            {/* Content Split View */}
-            <div style={{
-                display: 'grid',
-                gridTemplateColumns: '350px 1fr',
-                gap: '1.5rem',
-                flex: 1,
-                alignItems: 'start' // Items align to top, don't stretch to max height
-            }}>
-
+            <div className="artist-split-grid">
                 {/* Left Column: Artist List */}
                 <div className="glass-card" style={{
                     padding: '0',
@@ -151,11 +83,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                     maxWidth: 'none',
                     width: '100%'
                 }}>
-                    <div style={{
-                        padding: '1.5rem',
-                        flexShrink: 0,
-                        // Removed zIndex/border as we are no longer internally scrolling
-                    }}>
+                    <div style={{ padding: '1.5rem', flexShrink: 0 }}>
                         <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Select Artists</h3>
                         <p style={{ margin: '0.5rem 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                             Click to filter songs
@@ -185,7 +113,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                                                 transition: 'all 0.2s ease',
                                                 boxSizing: 'border-box',
                                                 overflow: 'hidden',
-                                                width: '100%' // Ensure explicit width constraint
+                                                width: '100%'
                                             }}
                                             onClick={() => toggleArtist(artist.name)}
                                         >
@@ -215,7 +143,6 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                                                 </div>
                                             </div>
 
-                                            {/* Minimal Check Indicator */}
                                             {isSelected && (
                                                 <div style={{ color: 'var(--accent)', fontSize: '1.2rem', marginLeft: '0.2rem' }}>•</div>
                                             )}
@@ -248,7 +175,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                 }}>
                     {selectedArtists.size === 0 ? (
                         <div style={{
-                            padding: '4rem 1rem', // Added padding instead of relying on flex center
+                            padding: '4rem 1rem',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -270,7 +197,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                                 alignItems: 'center',
                                 background: 'rgba(255,255,255,0.02)',
                                 gap: '1rem',
-                                flexWrap: 'wrap' // Allow wrapping on very small screens
+                                flexWrap: 'wrap'
                             }}>
                                 <div style={{ minWidth: 0, flex: 1 }}>
                                     <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
@@ -297,8 +224,6 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                                         whiteSpace: 'nowrap',
                                         flexShrink: 0
                                     }}
-                                    onMouseOver={(e) => e.target.style.background = 'rgba(255,107,107,0.2)'}
-                                    onMouseOut={(e) => e.target.style.background = 'rgba(255,107,107,0.1)'}
                                 >
                                     Clear Selection
                                 </button>
@@ -307,7 +232,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                                 <TrackTable
                                     tracks={filteredTracks}
                                     playlist={{ tracks: { total: filteredTracks.length } }}
-                                    visibleColumns={tableColumns}
+                                    visibleColumns={TABLE_COLUMNS}
                                     formatDate={formatDate}
                                     formatDuration={formatDuration}
                                 />
@@ -316,7 +241,7 @@ const ArtistAnalysis = ({ tracks, settings, onBack }) => {
                     )}
                 </div>
             </div>
-        </div >
+        </div>
     );
 };
 

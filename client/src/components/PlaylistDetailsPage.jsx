@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
 import '../App.css';
-import { removeTracksFromPlaylist, createPlaylist, addTracksToPlaylist, buildGlobalTrackMap } from '../services/spotify.service';
-import { utils, writeFile } from 'xlsx';
 import ExportOptionsModal from './ExportOptionsModal';
 import AnalysisModal from './AnalysisModal';
 import TrackTable from './TrackTable';
@@ -10,50 +8,29 @@ import ArtistAnalysis from './ArtistAnalysis';
 import TimelineAnalysis from './TimelineAnalysis';
 import PlaylistStats from './PlaylistStats';
 import DeepAnalysis from './DeepAnalysis';
+import PlaylistAccordion from './common/PlaylistAccordion';
 import { analyzeVibe } from '../services/analysis.utils';
+import { ExcelExporter, EXPORT_FIELDS } from '../services/ExcelExporter';
+import { PlaylistModel } from '../models/Playlist';
+import { ANALYSIS_MODULE_MAP } from '../config/analysisRegistry';
+import { formatDuration, formatDate } from '../utils/formatters';
+import { getMusicProvider } from '../providers/ProviderFactory';
+import { createClientLogger } from '../utils/logger';
 
-const PlaylistAccordion = ({ title, tracks, playlist, visibleColumns, formatDate, formatDuration }) => {
-    const [isOpen, setIsOpen] = React.useState(true);
+const logger = createClientLogger('PlaylistDetails');
 
-    return (
-        <div className="playlist-accordion" style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', overflow: 'hidden' }}>
-            <div
-                className="accordion-header"
-                onClick={() => setIsOpen(!isOpen)}
-                style={{
-                    padding: '1rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    background: 'rgba(255,255,255,0.05)',
-                    borderBottom: isOpen ? '1px solid rgba(255,255,255,0.1)' : 'none'
-                }}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ transform: `rotate(${isOpen ? 90 : 0}deg)`, transition: 'transform 0.2s' }}>▶</span>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>({tracks.length})</span>
-                </div>
-            </div>
+const PlaylistDetailsPage = ({
+    playlist,
+    tracks,
+    onBack,
+    onHome,
+    isFetching,
+    token,
+    currentUserId,
+    providerId = 'spotify'
+}) => {
+    const provider = getMusicProvider(providerId);
 
-            {isOpen && (
-                <div className="accordion-content">
-                    <TrackTable
-                        tracks={tracks}
-                        playlist={playlist}
-                        visibleColumns={visibleColumns}
-                        formatDate={formatDate}
-                        formatDuration={formatDuration}
-                    />
-                </div>
-            )}
-        </div>
-    );
-};
-
-const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, token, currentUserId }) => {
-    // Column Visibility State
     const [visibleColumns, setVisibleColumns] = useState({
         index: true,
         art: true,
@@ -67,12 +44,13 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
 
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [exportProgress, setExportProgress] = useState(null);
 
-    // Analysis State
-    const [activeAnalysis, setActiveAnalysis] = useState(null); // 'vibe', 'timeline', 'artists', 'stats'
-    const [activeModules, setActiveModules] = useState([]); // List of currently active modules ['vibe', 'stats']
+    const [activeAnalysis, setActiveAnalysis] = useState(null);
+    const [activeModules, setActiveModules] = useState([]);
     const [analysisSettings, setAnalysisSettings] = useState({});
-    const [analysisProgress, setAnalysisProgress] = useState(null); // { current, total, message }
+    const [analysisProgress, setAnalysisProgress] = useState(null);
     const [analysisResult, setAnalysisResult] = useState(null);
     const [analysisError, setAnalysisError] = useState(null);
 
@@ -80,55 +58,38 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
         setShowAnalysisModal(false);
         const selectedModules = Object.keys(selectionConfig);
 
-        // Save all selected modules
         setActiveModules(selectedModules);
-
-        // Reset previous states
         setAnalysisResult(null);
         setAnalysisError(null);
         setAnalysisSettings({});
 
-        // Default to first selected module
         let nextActive = selectedModules[0];
 
-        // Specific handling if Vibe is included (needs async)
         if (selectedModules.includes('vibe')) {
-            // If vibe is present, prioritize showing it or at least start it
             nextActive = 'vibe';
-
-            // Start Vibe Analysis
             setAnalysisProgress({ current: 0, total: 100, message: 'Starting analysis...' });
 
             try {
                 const result = await analyzeVibe(token, tracks, (current, total, message) => {
                     setAnalysisProgress({ current, total, message });
                 });
-
-                // Done
                 setAnalysisResult(result);
-                // Don't force set active here if user switched tabs, but initial load sets it
                 setAnalysisProgress(null);
             } catch (err) {
-                console.error("Analysis failed", err);
-                setAnalysisError(err.message || "Failed to analyze playlist.");
+                logger.error('Analysis failed', err);
+                setAnalysisError(err.message || 'Failed to analyze playlist.');
                 setAnalysisProgress(null);
             }
         }
 
-        // Handle settings for artists if present
         if (selectedModules.includes('artists')) {
             setAnalysisSettings(selectionConfig['artists'] || []);
         }
 
         if (selectedModules.includes('cleaner')) {
             const subOpts = selectionConfig['cleaner'] || [];
-            if (subOpts.includes('advanced_filter')) {
-                setAnalysisSettings(prev => ({ ...prev, initialTab: 'advanced_filter' }));
-            } else {
-                setAnalysisSettings(prev => ({ ...prev, initialTab: 'duplicates' }));
-            }
-            // Prioritize cleaner if it's the only one or explicitly selected?
-            // If activeAnalysis is not set yet (by vibe), set it.
+            const initialTab = subOpts.includes('advanced_filter') ? 'advanced_filter' : 'duplicates';
+            setAnalysisSettings(prev => ({ ...prev, initialTab }));
             if (!nextActive || nextActive === 'cleaner') {
                 nextActive = 'cleaner';
             }
@@ -141,85 +102,9 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
         setVisibleColumns(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    // Helper to format duration (ms -> m:ss)
-    const formatDuration = (ms) => {
-        const minutes = Math.floor(ms / 60000);
-        const seconds = ((ms % 60000) / 1000).toFixed(0);
-        return minutes + ":" + (seconds < 10 ? '0' : '') + seconds;
-    };
-
-    const formatDate = (dateString) => {
-        if (!dateString) return '-';
-        return new Date(dateString).toLocaleDateString();
-    };
-
-    const handleBack = () => {
-        setActiveAnalysis(null);
-        setActiveModules([]);
-        setAnalysisResult(null);
-        onBack(); // Calls parent back if needed, but here we just reset analysis mode usually
-        // Actually onBack usually goes back to Playlist List. 
-        // If we are in analysis mode, we want to go back to Track List first.
-    };
-
     const exitAnalysis = () => {
         setActiveAnalysis(null);
         setActiveModules([]);
-    }
-
-    const [showExportModal, setShowExportModal] = useState(false);
-
-    // Define available fields for export
-    // Define available fields for export
-    const EXPORT_FIELDS = [
-        {
-            key: 'track_name',
-            label: 'Track Name',
-            accessor: t => {
-                const url = t.external_urls?.spotify || '';
-                const name = (t.name || '').replace(/"/g, '""'); // Escape quotes for Excel formula
-                return url ? `=HYPERLINK("${url}","${name}")` : name;
-            }
-        },
-        {
-            key: 'available_in_playlists',
-            label: 'Available in Playlists',
-            accessor: (t, item) => {
-                // If we have enhanced data from Deep Analysis
-                if (item.sourcePlaylists && item.sourcePlaylists.length > 0) {
-                    return item.sourcePlaylists.join(", ");
-                }
-                // Fallback to single source
-                return item.sourcePlaylist ? item.sourcePlaylist.name : (playlist.name || '');
-            }
-        },
-        { key: 'artist_names', label: 'Artist Names', accessor: t => t.artists?.map(a => a.name).join(', ') || '' },
-        { key: 'album_name', label: 'Album Name', accessor: t => t.album?.name || '' },
-        { key: 'track_popularity', label: 'Popularity', accessor: t => t.popularity },
-        { key: 'track_duration_ms', label: 'Duration (ms)', accessor: t => t.duration_ms },
-        { key: 'track_explicit', label: 'Explicit', accessor: t => t.explicit ? 'Yes' : 'No' },
-        { key: 'track_number', label: 'Track Number', accessor: t => t.track_number },
-        { key: 'disc_number', label: 'Disc Number', accessor: t => t.disc_number },
-        { key: 'album_release_date', label: 'Release Date', accessor: t => t.album?.release_date || '' },
-        { key: 'album_type', label: 'Album Type', accessor: t => t.album?.album_type || '' },
-        { key: 'artist_ids', label: 'Artist IDs', accessor: t => t.artists?.map(a => a.id).join(', ') || '' },
-        { key: 'album_id', label: 'Album ID', accessor: t => t.album?.id || '' },
-        { key: 'track_id', label: 'Track ID', accessor: t => t.id },
-        { key: 'track_isrc', label: 'ISRC', accessor: t => t.external_ids?.isrc || '' },
-        {
-            key: 'danceability',
-            label: 'Danceability',
-            accessor: t => t.audio_features?.danceability || ''
-        },
-        { key: 'added_at', label: 'Added At', accessor: (t, item) => item.added_at ? new Date(item.added_at).toISOString() : '' },
-        { key: 'spotify_url', label: 'Spotify URL', accessor: t => t.external_urls?.spotify || '' },
-        { key: 'uri', label: 'URI', accessor: t => t.uri }
-    ];
-
-    const [exportProgress, setExportProgress] = useState(null);
-
-    const handleExportClick = () => {
-        setShowExportModal(true);
     };
 
     const executeExport = async (selectedFieldKeys) => {
@@ -227,85 +112,38 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
 
         let finalTracks = tracks;
 
-        // Check if we need global playlist data
         if (selectedFieldKeys.includes('available_in_playlists')) {
-            // Check if we already have detailed source info (e.g. from Deep Analysis)
-            // If not, we might need to fetch it.
-            // For now, let's always fetch if the user asks for this column in "Liked Songs" or standard view,
-            // to ensure they get the "Global" view they requested.
-
-            // Show loading
-            setShowExportModal(false); // Close modal first
-            setExportProgress("Initializing global library scan...");
+            setShowExportModal(false);
+            setExportProgress('Initializing global library scan...');
 
             try {
-                const globalMap = await buildGlobalTrackMap(token, currentUserId, (curr, total) => {
+                const globalMap = await provider.buildGlobalTrackMap(token, currentUserId, (curr, total) => {
                     setExportProgress(`Scanning playlists: ${curr}/${total}...`);
                 });
 
-                // Enrich tracks
                 finalTracks = tracks.map(item => {
-                    // item.track might be null for bad items
                     if (!item.track || !item.track.uri) return item;
-
-                    const uri = item.track.uri;
-                    const playlists = globalMap[uri];
-
-                    if (playlists) {
-                        // Attach to a new property we use in accessor
-                        return { ...item, sourcePlaylists: playlists };
-                    }
-                    return item;
+                    const playlists = globalMap[item.track.uri];
+                    return playlists ? { ...item, sourcePlaylists: playlists } : item;
                 });
-
             } catch (err) {
-                console.error("Global scan failed", err);
-                alert("Global playlist scan failed. Exporting with current view only.");
+                logger.error('Global scan failed', err);
+                alert('Global playlist scan failed. Exporting with current view only.');
             } finally {
                 setExportProgress(null);
             }
         }
 
-        const data = finalTracks.map(item => {
-            const t = item.track || item;
-            const row = {};
-
-            selectedFieldKeys.forEach(key => {
-                const fieldConfig = EXPORT_FIELDS.find(f => f.key === key);
-                if (fieldConfig) {
-                    row[key] = fieldConfig.accessor(t, item);
-                }
-            });
-
-            return row;
-        });
-
-        const ws = utils.json_to_sheet(data);
-
-        // Fix formulas (strings starting with '=') to be treated as Excel formulas
-        if (ws['!ref']) {
-            const range = utils.decode_range(ws['!ref']);
-            for (let R = range.s.r; R <= range.e.r; ++R) {
-                for (let C = range.s.c; C <= range.e.c; ++C) {
-                    const cellAddress = utils.encode_cell({ c: C, r: R });
-                    const cell = ws[cellAddress];
-                    if (cell && cell.v && typeof cell.v === 'string' && cell.v.startsWith('=')) {
-                        cell.f = cell.v.substring(1); // Set formula (remove leading =)
-                        cell.v = undefined; // Remove string value so Excel calculates it
-                    }
-                }
-            }
-        }
-
-        const wb = utils.book_new();
-        utils.book_append_sheet(wb, ws, "Playlist Tracks");
-        const safeName = (playlist.name || 'Playlist').replace(/[^a-z0-9]/gi, '_');
-        writeFile(wb, `${safeName}_Export.xlsx`);
+        const safeName = PlaylistModel.getSafeExportName(playlist);
+        new ExcelExporter(finalTracks)
+            .withFields(selectedFieldKeys)
+            .withContextPlaylist(playlist)
+            .withSheetName('Playlist Tracks')
+            .download(`${safeName}_Export.xlsx`);
     };
 
     return (
         <div className="playlist-page-layout">
-            {/* Toggle Button for Mobile/Closed State */}
             <button
                 className="sidebar-toggle-btn"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -314,7 +152,6 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                 {isMenuOpen ? '×' : '⚙️'}
             </button>
 
-            {/* Sidebar Menu */}
             <div className={`options-sidebar ${isMenuOpen ? 'open' : ''}`}>
                 <div className="sidebar-tabs">
                     <span className="sidebar-tab active" style={{ cursor: 'default' }}>
@@ -353,10 +190,9 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                 </div>
             </div>
 
-            {/* Main Content Area */}
             <div className="playlist-details-container main-content-area">
                 {!activeAnalysis && (
-                    <div style={{ display: 'flex', gap: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                         <button className="spotify-btn action-btn-outline back-btn" onClick={onHome}>
                             🏠 Main Menu
                         </button>
@@ -369,9 +205,9 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                 {!activeAnalysis && (
                     <div className="details-header">
                         <div className="details-image-container">
-                            {playlist.id === 'LIKED_SONGS' ? (
-                                <div className="playlist-image-placeholder liked-songs-bg">
-                                    <span style={{ fontSize: '4rem' }}>💜</span>
+                            {PlaylistModel.isLikedSongs(playlist) ? (
+                                <div className="playlist-image-placeholder liked-songs-image">
+                                    <span className="liked-heart">♥</span>
                                 </div>
                             ) : playlist.images && playlist.images.length > 0 ? (
                                 <img
@@ -380,17 +216,19 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                                     className="details-image"
                                 />
                             ) : (
-                                <div className="playlist-image-placeholder"></div>
+                                <div className="playlist-image-placeholder">
+                                    <span style={{ fontSize: '4rem' }}>🎵</span>
+                                </div>
                             )}
                         </div>
                         <div className="details-info">
-                            <span className="details-type">Playlist</span>
+                            <span className="details-type">{provider.displayName} Playlist</span>
                             <h1 className="details-title">{playlist.name}</h1>
                             <p className="details-desc">{playlist.description}</p>
                             <div className="details-meta">
-                                <span className="details-owner">{playlist.owner.display_name}</span>
+                                <span className="details-owner">{playlist.owner?.display_name || 'You'}</span>
                                 <span className="dot">•</span>
-                                <span className="details-count">{playlist.tracks.total} songs</span>
+                                <span className="details-count">{playlist.tracks?.total || tracks.length} songs</span>
                                 <span className={`privacy-badge ${playlist.public ? 'public' : 'private'}`}>
                                     {playlist.public ? 'Public' : 'Private'}
                                 </span>
@@ -401,30 +239,31 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                                 </div>
                             )}
                         </div>
-                        {/* Header Action Buttons */}
+
                         <div className="header-actions-area">
                             <button
-                                className="spotify-btn header-analyze-btn"
-                                onClick={handleExportClick}
-                                style={{ marginRight: '1rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)' }}
+                                className="spotify-btn header-secondary-btn"
+                                onClick={() => setShowExportModal(true)}
                             >
                                 📥 Export Excel
                             </button>
                             <button
-                                className="spotify-btn header-analyze-btn"
+                                className="spotify-btn header-secondary-btn"
                                 onClick={() => {
-                                    // Direct Deep Analysis
                                     setShowAnalysisModal(false);
                                     setActiveModules(['cleaner']);
                                     setAnalysisSettings({ initialTab: 'duplicates' });
                                     setActiveAnalysis('cleaner');
                                 }}
-                                disabled={!!analysisProgress}
-                                style={{ marginRight: '1rem', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
+                                disabled={Boolean(analysisProgress)}
                             >
                                 🧹 Deep Analysis
                             </button>
-                            <button className="spotify-btn header-analyze-btn" onClick={() => setShowAnalysisModal(true)} disabled={!!analysisProgress}>
+                            <button
+                                className="spotify-btn header-analyze-btn"
+                                onClick={() => setShowAnalysisModal(true)}
+                                disabled={Boolean(analysisProgress)}
+                            >
                                 {analysisProgress ? 'Analyzing...' : '📊 Analyze Playlist'}
                             </button>
                         </div>
@@ -455,7 +294,6 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                     </div>
                 )}
 
-                {/* Progress Overlay */}
                 {analysisProgress && (
                     <div className="analysis-progress-overlay glass-card" style={{
                         position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 1000,
@@ -476,7 +314,6 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                     <div className="status-box error" style={{ margin: '1rem 0' }}>{analysisError}</div>
                 )}
 
-                {/* Analysis Tab Bar */}
                 {activeModules.length > 0 && (
                     <div className="analysis-tab-bar" style={{
                         display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap',
@@ -491,23 +328,19 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                         </button>
                         <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '0 0.5rem' }}></div>
 
-                        {activeModules.map(module => (
+                        {activeModules.map(moduleKey => (
                             <button
-                                key={module}
-                                className={`spotify-btn ${activeAnalysis === module ? '' : 'action-btn-outline'}`}
+                                key={moduleKey}
+                                className={`spotify-btn ${activeAnalysis === moduleKey ? '' : 'action-btn-outline'}`}
                                 style={{
                                     padding: '6px 16px', fontSize: '0.9rem',
-                                    background: activeAnalysis === module ? 'var(--accent)' : 'transparent',
-                                    color: activeAnalysis === module ? '#000' : '#fff',
-                                    border: activeAnalysis === module ? 'none' : '1px solid transparent'
+                                    background: activeAnalysis === moduleKey ? 'var(--accent)' : 'transparent',
+                                    color: activeAnalysis === moduleKey ? '#000' : '#fff',
+                                    border: activeAnalysis === moduleKey ? 'none' : '1px solid transparent'
                                 }}
-                                onClick={() => setActiveAnalysis(module)}
+                                onClick={() => setActiveAnalysis(moduleKey)}
                             >
-                                {module === 'vibe' && 'Vibe Check'}
-                                {module === 'artists' && 'Artist Breakdown'}
-                                {module === 'timeline' && 'Timeline'}
-                                {module === 'stats' && 'Playlist Stats'}
-                                {module === 'cleaner' && 'Deep Analysis'}
+                                {ANALYSIS_MODULE_MAP[moduleKey]?.tabLabel || moduleKey}
                             </button>
                         ))}
                     </div>
@@ -554,36 +387,12 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                         }}
                         isLoading={isFetching}
                         currentUserId={currentUserId}
+                        providerId={providerId}
                     />
                 ) : (
                     <>
-
-                        {playlist.id === 'COMBINED_ANALYSIS' ? (
+                        {PlaylistModel.isCombined(playlist) ? (
                             <div className="combined-playlists-view">
-                                <div className="combined-controls" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-                                    <button
-                                        className="spotify-btn action-btn-outline"
-                                        onClick={() => {
-                                            // Toggle all logic could go here, for now just a helper
-                                            // We'll implement individual toggles first
-                                            const allGroups = Object.values(
-                                                tracks.reduce((acc, t) => {
-                                                    const id = t.sourcePlaylist?.id || 'unknown';
-                                                    if (!acc[id]) acc[id] = true;
-                                                    return acc;
-                                                }, {})
-                                            );
-                                            // Implementation detail: we need state for this. 
-                                            // Let's rely on the internal state of the map below or lift it.
-                                            // Easier to just inline the map and use a simple local state for the list? 
-                                            // Actually, simplest is to make a small component for each group that manages its own state.
-                                        }}
-                                        style={{ fontSize: '0.8rem', padding: '4px 8px', display: 'none' }} // Hidden for now, self-managing
-                                    >
-                                        Toggle All
-                                    </button>
-                                </div>
-
                                 {Object.values(tracks.reduce((groups, track) => {
                                     const source = track.sourcePlaylist || { id: 'unknown', name: 'Unknown Source' };
                                     if (!groups[source.id]) {
@@ -617,18 +426,18 @@ const PlaylistDetailsPage = ({ playlist, tracks, onBack, onHome, isFetching, tok
                                 />
                             </div>
                         )}
-                        {/* Scroll Loading Indicator for flat lists (or combined if we want infinite scroll there too, but combined is usually fully fetched) */}
-                        {isFetching && playlist.id !== 'COMBINED_ANALYSIS' && (
+                        {isFetching && !PlaylistModel.isCombined(playlist) && (
                             <div className="scroll-loading-indicator">
                                 <div className="spinner-small"></div>
-                                <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading more songs...</span>
+                                <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                    Loading more songs...
+                                </span>
                             </div>
                         )}
-
                     </>
                 )}
             </div>
-        </div >
+        </div>
     );
 };
 

@@ -6,18 +6,19 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
+        "test": "node --test tests/toolkit.test.js",
         "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
         "preview": "vite preview"
     },
     "dependencies": {
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
-        "selfsigned": "^5.5.0",
         "xlsx": "^0.18.5"
     },
     "devDependencies": {
         "@types/react": "^18.2.66",
         "@types/react-dom": "^18.2.22",
+        "@vitejs/plugin-basic-ssl": "^2.1.4",
         "@vitejs/plugin-react": "^4.2.1",
         "eslint": "^8.57.0",
         "eslint-plugin-react": "^7.34.1",
