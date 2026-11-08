@@ -11,7 +11,7 @@ module.exports = {
     // Spotify Configuration
     CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
     CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET,
-    REDIRECT_URI: process.env.REDIRECT_URI || 'https://localhost:8888/callback',
+    REDIRECT_URI: process.env.REDIRECT_URI || process.env.SPOTIFY_REDIRECT_URI || 'https://localhost:8888/callback',
 
     // Anghami Configuration (Anghami + OSN+ SDK: sdk.anghami.com)
     ANGHAMI_CLIENT_ID: process.env.ANGHAMI_CLIENT_ID || '',

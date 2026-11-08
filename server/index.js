@@ -25,8 +25,9 @@ app.use(express.json());
 app.use(requestLoggerMiddleware);
 
 app.use('/', authRoutes);
+app.use('/api/auth', authRoutes);
 
-app.get('/', (req, res) => {
+const healthHandler = (req, res) => {
     res.json({
         message: 'Spotify & Anghami Auth Server is running',
         providers: {
@@ -34,7 +35,10 @@ app.get('/', (req, res) => {
             anghami: true
         }
     });
-});
+};
+
+app.get('/', healthHandler);
+app.get('/health', healthHandler);
 
 const launchHttpServer = () => {
     http.createServer(app).listen(config.PORT, config.HOST, () => {
