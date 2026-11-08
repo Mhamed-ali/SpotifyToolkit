@@ -211,9 +211,14 @@ function App() {
 
             if (!tracksCacheRef.current[pl.id]) {
                 setScanProgress({
+                    phase: 'tracks',
+                    phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
+                    playlistName: pl.name,
                     current: i + 1,
                     total: totalPlaylists,
-                    label: `Downloading ${pl.name} (${i + 1}/${totalPlaylists})...`
+                    tracksAnalyzed: accumulated.length,
+                    label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
+                    subLabel: `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
                 });
             }
 
@@ -246,9 +251,14 @@ function App() {
         const uniqueMissingArtistIds = Array.from(new Set(missingArtistIds));
         if (uniqueMissingArtistIds.length > 0 && activeProvider.fetchArtistsBatch) {
             setScanProgress({
+                phase: 'genres',
+                phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
+                playlistName: `${uniqueMissingArtistIds.length} Artists`,
                 current: totalPlaylists,
                 total: totalPlaylists,
-                label: `Analyzing genres for ${uniqueMissingArtistIds.length} artists...`
+                tracksAnalyzed: accumulated.length,
+                label: `Analyzing genres for ${uniqueMissingArtistIds.length} artists...`,
+                subLabel: `Cross-referencing Spotify MENA & Arabic genre tags across ${accumulated.length} analyzed tracks`
             });
 
             try {
@@ -1228,13 +1238,56 @@ function App() {
                     {/* RIGHT MAIN WORKSPACE */}
                     <main className="v2-main-content">
 
-                        {/* Scanning Progress Banner */}
+                        {/* Live Track Analysis Visualizer Card */}
                         {scanProgress && (
                             <div className="v2-scan-banner">
-                                <span>⚡ {scanProgress.label}</span>
-                                <span className="brand-text" style={{ fontWeight: 700 }}>
-                                    {Math.round((scanProgress.current / scanProgress.total) * 100)}%
-                                </span>
+                                <div className="v2-scan-top">
+                                    <div className="v2-scan-left">
+                                        <div className="v2-eq-bars" aria-hidden="true">
+                                            <span className="v2-eq-bar" />
+                                            <span className="v2-eq-bar" />
+                                            <span className="v2-eq-bar" />
+                                            <span className="v2-eq-bar" />
+                                        </div>
+                                        <div className="v2-scan-info">
+                                            <div className="v2-scan-title-row">
+                                                <span className="v2-scan-phase-badge">
+                                                    {scanProgress.phaseBadge || 'LIVE ANALYSIS'}
+                                                </span>
+                                                <span className="v2-scan-title">{scanProgress.label}</span>
+                                            </div>
+                                            {scanProgress.subLabel && (
+                                                <div className="v2-scan-sub">{scanProgress.subLabel}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="v2-scan-right">
+                                        <span className="v2-scan-stat-pill">
+                                            🎵 {(scopeTracks.length || scanProgress.tracksAnalyzed || 0).toLocaleString()} analyzed
+                                        </span>
+                                        {isArabicWorkflow && (
+                                            <span className="v2-scan-stat-pill v2-scan-stat-accent">
+                                                🌙 {arabicTotalCount} matches
+                                            </span>
+                                        )}
+                                        {activeWorkflow === 'duplicates' && (
+                                            <span className="v2-scan-stat-pill v2-scan-stat-accent">
+                                                🧹 {duplicateRemoveCount} duplicates
+                                            </span>
+                                        )}
+                                        <span className="v2-scan-pct brand-text">
+                                            {Math.round((scanProgress.current / scanProgress.total) * 100)}%
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="v2-scan-progress-track">
+                                    <div
+                                        className={`v2-scan-progress-fill ${scanProgress.phase === 'genres' ? 'pulsing' : ''}`}
+                                        style={{
+                                            width: `${Math.max(8, Math.round((scanProgress.current / scanProgress.total) * 100))}%`
+                                        }}
+                                    />
+                                </div>
                             </div>
                         )}
 
@@ -1623,8 +1676,19 @@ function App() {
                         {/* TRACK LIST CONTAINER */}
                         <div className="v2-tracks-list">
                             {(isLoadingLibrary || scanProgress) && filteredTracks.length === 0 ? (
-                                <div className="obsidian-card" style={{ padding: '2.5rem', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                                    {scanProgress ? scanProgress.label : 'Loading your music library...'}
+                                <div className="obsidian-card v2-analyzing-empty">
+                                    <div className="v2-eq-bars v2-eq-bars-lg" aria-hidden="true">
+                                        <span className="v2-eq-bar" />
+                                        <span className="v2-eq-bar" />
+                                        <span className="v2-eq-bar" />
+                                        <span className="v2-eq-bar" />
+                                    </div>
+                                    <div style={{ fontWeight: 700, color: '#f4f4f5', fontSize: '0.88rem' }}>
+                                        {scanProgress ? scanProgress.label : 'Analyzing your music library...'}
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                                        {scanProgress?.subLabel || 'Scanning playlist metadata, artist scripts & genres in real time...'}
+                                    </div>
                                 </div>
                             ) : filteredTracks.length === 0 ? (
                                 <div className="obsidian-card" style={{ padding: '2.5rem', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
