@@ -49,7 +49,7 @@ function App() {
     const [advancedOptions, setAdvancedOptions] = useState({
         matchCriteria: 'fuzzy',          // 'strict' | 'fuzzy'
         durationTolerance: 2,            // 0 .. 5 seconds
-        scope: 'cross',                  // 'cross' | 'per'
+        scope: 'per',                    // 'per' (default) | 'cross'
         keepStrategy: 'oldest',          // 'oldest' | 'newest' | 'popular'
         strictArabicExtraction: false    // false = Standard (includes Artist Script + Genres), true = Strict
     });
