@@ -1267,7 +1267,7 @@ function App() {
                                         </span>
                                         {isArabicWorkflow && (
                                             <span className="v2-scan-stat-pill v2-scan-stat-accent">
-                                                🌙 {arabicTotalCount} matches
+                                                🌙 {scopeArabicCount} matches
                                             </span>
                                         )}
                                         {activeWorkflow === 'duplicates' && (
