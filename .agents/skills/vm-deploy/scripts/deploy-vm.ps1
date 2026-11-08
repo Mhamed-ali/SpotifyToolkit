@@ -113,6 +113,7 @@ server {
 NGINX_EOF
 
 sudo nginx -t
+sudo certbot renew --non-interactive || true
 sudo systemctl reload nginx
 
 echo "--- [6/6] Restarting PM2 process (spotify-toolkit) ---"
@@ -124,7 +125,7 @@ pm2 save
 sleep 2
 curl -s http://127.0.0.1:8888/health
 echo ""
-pm2 status
+pm2 list
 '@
 
 $remoteScript = $remoteScript.Replace('$BRANCH', $Branch).Replace("`r`n", "`n")
