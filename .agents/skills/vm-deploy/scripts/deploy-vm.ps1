@@ -67,7 +67,7 @@ npm install --no-audit --no-fund
 npm test
 
 cd /home/ubuntu/spotifytoolkit/client
-npm install --no-audit --no-fund
+npm install --legacy-peer-deps --no-audit --no-fund
 npm test
 NODE_OPTIONS="--max-old-space-size=768" npm run build
 
