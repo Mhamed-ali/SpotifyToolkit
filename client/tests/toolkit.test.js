@@ -133,6 +133,25 @@ test('Suite 4 — ArabicDetector (3-Tier Script, Keyword, Strict & Broad Artist,
         ArabicDetector.detectTrack({ track: { name: 'Track', artists: [{ name: 'Band' }], album: { name: 'Layali Chill' } } }),
         /Keyword: Layali \(Album\)/
     );
+    assert.match(
+        ArabicDetector.detectTrack({ track: { name: 'Song', artists: [{ name: 'فرقة كايروكي' }], album: { name: 'Mix' } } }, { strictMode: true }),
+        /Known Artist: كايروكي/
+    );
+    assert.equal(
+        ArabicDetector.detectTrack({ track: { name: 'English Song', artists: [{ name: 'Various Artists' }], album: { name: 'Album' } } }),
+        null
+    );
+    assert.match(
+        ArabicDetector.detectTrack(
+            { track: { name: 'Midnight', artists: [{ name: 'Indie Singer' }], album: { name: 'Live' } } },
+            { strictMode: false, artistGenres: ['egyptian pop', 'indie'] }
+        ),
+        /Genre Match \("egyptian pop"\)/
+    );
+    assert.equal(
+        ArabicDetector.detectByGenres(['egyptian pop'], true),
+        null
+    );
 });
 
 test('Suite 5 — TrackSpecifications & TrackFilterEngine (Primary, Collab, Year, Arabic, AND/OR)', () => {
@@ -206,8 +225,32 @@ test('Suite 6 — DuplicateDetector (Per-Playlist vs Overall, Duration Matching 
     assert.equal(DuplicateDetector.getSelectionKey(sampleTracks[0]), 'p1::spotify:track:1');
     assert.equal(DuplicateDetector.getSelectionKey({}), 'SINGLE::');
     assert.equal(DuplicateDetector.extractUriFromKey('p1::spotify:track:1'), 'spotify:track:1');
+    assert.equal(DuplicateDetector.extractUriFromKey('p1::spotify:track:1::0'), 'spotify:track:1');
     assert.equal(DuplicateDetector.extractUriFromKey('spotify:track:1'), 'spotify:track:1');
     assert.equal(DuplicateDetector.extractUriFromKey(''), '');
+
+    const strictClusters = DuplicateDetector.clusterTracks(
+        [
+            sampleTracks[0],
+            { ...sampleTracks[0], sourcePlaylist: { id: 'p2', name: 'A Playlist' } }
+        ],
+        { matchCriteria: 'strict', scope: 'cross' }
+    );
+    assert.equal(strictClusters.length, 1);
+
+    const fuzzyClustersWithin5s = DuplicateDetector.clusterTracks(sampleTracks, {
+        matchCriteria: 'fuzzy',
+        durationTolerance: 5,
+        scope: 'cross'
+    });
+    assert.equal(fuzzyClustersWithin5s.length, 1);
+
+    const fuzzyClustersSplit1s = DuplicateDetector.clusterTracks(sampleTracks, {
+        matchCriteria: 'fuzzy',
+        durationTolerance: 1,
+        scope: 'cross'
+    });
+    assert.equal(fuzzyClustersSplit1s.length, 0);
     assert.deepEqual(DuplicateDetector.findDuplicates([]), []);
 
     assert.equal(DuplicateDetector.findDuplicates(sampleTracks, { isCombined: true, scope: 'overall', matchDuration: false }).length, 1);
@@ -515,6 +558,20 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
         const pagedLikedTracks = await spotifyService.fetchAllTracksForPlaylist('tok', PLAYLIST_IDS.LIKED_SONGS);
         assert.equal(pagedLikedTracks.length, 2);
 
+        global.fetch = async (url) => {
+            if (url.includes('/artists?ids=')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ artists: [{ id: 'art1', genres: ['egyptian pop'] }] })
+                };
+            }
+            return { ok: false, status: 500 };
+        };
+        const artistsBatch = await spotifyService.fetchArtistsBatch('tok', ['art1']);
+        assert.equal(artistsBatch.length, 1);
+        assert.deepEqual(await spotifyService.fetchArtistsBatch('tok', []), []);
+
         // 5. Test non-OK error throws on fetchPlaylistTracks, fetchSavedTracks, removeTracksFromPlaylist
         global.fetch = async () => ({ ok: false, status: 403, statusText: 'Forbidden' });
         await assert.rejects(() => spotifyService.fetchPlaylistTracks('tok', 'p1'), { status: 403 });
@@ -707,6 +764,7 @@ test('Suite 11 — ProviderFactory (Spotify vs Anghami Strategy & Link Parsing)'
     );
 
     assert.deepEqual(await anghami.fetchRemainingTracks(), []);
+    assert.deepEqual(await anghami.fetchArtistsBatch(), []);
     assert.equal((await anghami.fetchAudioFeatures()).error.status, 403);
     await assert.rejects(() => anghami.removeTracksFromPlaylist(), /read-only/);
     await assert.rejects(() => anghami.createPlaylist(), /read-only/);

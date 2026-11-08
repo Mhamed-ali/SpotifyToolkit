@@ -40,28 +40,33 @@ function App() {
     const [selectedPlaylistIds, setSelectedPlaylistIds] = useState(() => new Set(['ALL']));
 
     // =========================================================================
-    // WORKFLOW, FILTERS & TRACKS STATE
+    // WORKFLOW, ADVANCED OPTIONS & FILTER STATE
     // =========================================================================
     const [activeWorkflow, setActiveWorkflow] = useState(
         () => localStorage.getItem('pending_workflow') || 'arabic-all'
     );
-    const [activeFilterChip, setActiveFilterChip] = useState('arabic'); // 'all' | 'arabic' | '2020s' | 'classic'
+    const [isAdvOpen, setIsAdvOpen] = useState(false);
+    const [advancedOptions, setAdvancedOptions] = useState({
+        matchCriteria: 'fuzzy',          // 'strict' | 'fuzzy'
+        durationTolerance: 2,            // 0 .. 5 seconds
+        scope: 'cross',                  // 'cross' | 'per'
+        keepStrategy: 'oldest',          // 'oldest' | 'newest' | 'popular'
+        strictArabicExtraction: false    // false = Standard (includes Artist Script + Genres), true = Strict
+    });
+
     const [activeArtistFilter, setActiveArtistFilter] = useState(null);
     const [activeDecadeFilter, setActiveDecadeFilter] = useState(null);
     const [trackSearch, setTrackSearch] = useState('');
     const [sortBy, setSortBy] = useState('default');
-
-    // Duplicate Cleaner State
-    const [duplicateStrategy, setDuplicateStrategy] = useState('oldest'); // 'oldest' | 'popular'
-    const [matchDuration, setMatchDuration] = useState(false);
 
     // Insights / Vibe State
     const [includeCollabs, setIncludeCollabs] = useState(false);
     const [vibeStats, setVibeStats] = useState(null);
     const [isAnalyzingVibe, setIsAnalyzingVibe] = useState(false);
 
-    // Loaded Tracks & Selection State
+    // Loaded Tracks, Artist Genre Cache & Selection State
     const [rawScopeTracks, setRawScopeTracks] = useState([]);
+    const [genreCacheVersion, setGenreCacheVersion] = useState(0);
     const [selectedKeys, setSelectedKeys] = useState(() => new Set());
     const [scanProgress, setScanProgress] = useState(null); // { current, total, label }
     const [allLibraryArabicCount, setAllLibraryArabicCount] = useState(null);
@@ -79,8 +84,9 @@ function App() {
     );
     const [toastMessage, setToastMessage] = useState(null);
 
-    // Cache of loaded tracks per playlistId so switching views is instant
+    // Caches so switching views/playlists is instant
     const tracksCacheRef = useRef({});
+    const genreCacheRef = useRef(new Map());
     const loadOperationRef = useRef(0);
     const toastTimerRef = useRef(null);
 
@@ -94,6 +100,10 @@ function App() {
         }, 3200);
     }, []);
 
+    const updateAdvancedOption = (key, value) => {
+        setAdvancedOptions(prev => ({ ...prev, [key]: value }));
+    };
+
     // Sync token when spotify.service.js automatically refreshes an expired access token
     useEffect(() => {
         const handleTokenRefreshed = (e) => {
@@ -104,24 +114,22 @@ function App() {
     }, []);
 
     // =========================================================================
-    // ENRICH TRACK ITEM HELPER
+    // ENRICH TRACK ITEM HELPER (Unique _instanceKey per playlist instance)
     // =========================================================================
-    const enrichTrackItem = useCallback((item, sourcePlaylist) => {
+    const enrichTrackItem = useCallback((item, sourcePlaylist, instanceIdx = 0) => {
         if (!item || !item.track || !item.track.id) return null;
-        const arabicReason = ArabicDetector.detectTrack(item);
+        const pid = sourcePlaylist?.id || item.sourcePlaylist?.id || 'SINGLE';
+        const uri = item.track.uri || `spotify:track:${item.track.id}`;
         const releaseYear = parseInt(extractReleaseYear(item.track.album?.release_date), 10) || 0;
-        const enriched = {
+        const addedAtMs = item.added_at ? (new Date(item.added_at).getTime() || 0) : 0;
+
+        return {
             ...item,
             sourcePlaylist: item.sourcePlaylist || sourcePlaylist,
-            _arabicReason: arabicReason,
-            _isArabic: Boolean(arabicReason),
-            _releaseYear: releaseYear
+            _releaseYear: releaseYear,
+            _addedAtMs: addedAtMs,
+            _selectionKey: `${pid}::${uri}::${instanceIdx}`
         };
-        enriched._selectionKey = DuplicateDetector.getSelectionKey(
-            enriched,
-            sourcePlaylist?.id || 'SINGLE'
-        );
-        return enriched;
     }, []);
 
     // =========================================================================
@@ -145,8 +153,9 @@ function App() {
         if (pid === PLAYLIST_IDS.LIKED_SONGS) {
             const firstPage = await activeProvider.fetchSavedTracks(activeToken, 0, 50);
             const firstItems = firstPage?.items || [];
-            if (total > firstItems.length) {
-                const rest = await activeProvider.fetchRemainingTracks(activeToken, total, 'me', null);
+            const actualTotal = firstPage?.total ?? total;
+            if (actualTotal > firstItems.length) {
+                const rest = await activeProvider.fetchRemainingTracks(activeToken, actualTotal, 'me', null);
                 rawItems = [...firstItems, ...(rest || [])];
             } else {
                 rawItems = firstItems;
@@ -156,7 +165,7 @@ function App() {
         }
 
         const enriched = (rawItems || [])
-            .map(item => enrichTrackItem(item, sourceMeta))
+            .map((item, idx) => enrichTrackItem(item, sourceMeta, idx))
             .filter(Boolean);
 
         tracksCacheRef.current[pid] = enriched;
@@ -164,7 +173,7 @@ function App() {
     }, [enrichTrackItem]);
 
     // =========================================================================
-    // LOAD TRACKS FOR CURRENT PLAYLIST SCOPE ('ALL' OR SPECIFIC PLAYLISTS)
+    // LOAD TRACKS + PASS 2/3 ARTIST GENRE ANALYSIS FOR CURRENT SCOPE
     // =========================================================================
     const loadScopeTracks = useCallback(async (
         scopeSet,
@@ -200,11 +209,11 @@ function App() {
             if (loadOperationRef.current !== opId) return;
             const pl = targetPlaylists[i];
 
-            if (totalPlaylists > 1 && !tracksCacheRef.current[pl.id]) {
+            if (!tracksCacheRef.current[pl.id]) {
                 setScanProgress({
                     current: i + 1,
                     total: totalPlaylists,
-                    label: `Scanning ${pl.name} (${i + 1}/${totalPlaylists})...`
+                    label: `Downloading ${pl.name} (${i + 1}/${totalPlaylists})...`
                 });
             }
 
@@ -218,14 +227,46 @@ function App() {
             }
         }
 
+        if (loadOperationRef.current !== opId) return;
+
+        // PASS 2: Collect uncached artist IDs for tracks that did not match Pass 1 Regex
+        // so we can run Spotify Artist Genre detection (matching all 76/76 tracks!)
+        const missingArtistIds = [];
+        accumulated.forEach(item => {
+            const pass1Reason = ArabicDetector.detectTrack(item, { strictMode: false });
+            if (!pass1Reason && Array.isArray(item.track?.artists)) {
+                item.track.artists.forEach(a => {
+                    if (a?.id && !genreCacheRef.current.has(a.id)) {
+                        missingArtistIds.push(a.id);
+                    }
+                });
+            }
+        });
+
+        const uniqueMissingArtistIds = Array.from(new Set(missingArtistIds));
+        if (uniqueMissingArtistIds.length > 0 && activeProvider.fetchArtistsBatch) {
+            setScanProgress({
+                current: totalPlaylists,
+                total: totalPlaylists,
+                label: `Analyzing genres for ${uniqueMissingArtistIds.length} artists...`
+            });
+
+            try {
+                const artistObjs = await activeProvider.fetchArtistsBatch(activeToken, uniqueMissingArtistIds);
+                if (loadOperationRef.current !== opId) return;
+                artistObjs.forEach(artist => {
+                    if (artist?.id) {
+                        genreCacheRef.current.set(artist.id, artist.genres || []);
+                    }
+                });
+                setGenreCacheVersion(v => v + 1);
+            } catch (err) {
+                logger.warn('Artist genre batch lookup failed', err);
+            }
+        }
+
         if (loadOperationRef.current === opId) {
             setScanProgress(null);
-            if (scopeSet.has('ALL')) {
-                const uniqueArabicIds = new Set(
-                    accumulated.filter(t => t._isArabic).map(t => t.track.id)
-                );
-                setAllLibraryArabicCount(uniqueArabicIds.size);
-            }
         }
     }, [fetchTracksForPlaylistCached]);
 
@@ -238,6 +279,7 @@ function App() {
         setPlaylistsData([]);
         setRawScopeTracks([]);
         tracksCacheRef.current = {};
+        genreCacheRef.current.clear();
         localStorage.removeItem('spotify_access_token');
         localStorage.removeItem('spotify_refresh_token');
         localStorage.removeItem('music_provider');
@@ -304,7 +346,6 @@ function App() {
                 let loadedPlaylists = !playlistsRes?.error ? (playlistsRes.items || []) : [];
                 const likedTotal = !likedRes?.error ? (likedRes.total || 0) : 0;
 
-                // Check if user submitted a playlist link from the Login page
                 const pendingLink = localStorage.getItem('pending_playlist_link');
                 let initialScope = new Set(['ALL']);
                 let initialWorkflow = localStorage.getItem('pending_workflow') || 'arabic-all';
@@ -340,11 +381,6 @@ function App() {
                 setLikedSongsCount(likedTotal);
                 setSelectedPlaylistIds(initialScope);
                 setActiveWorkflow(initialWorkflow);
-                setActiveFilterChip(
-                    initialWorkflow === 'arabic-all' || initialWorkflow === 'arabic-playlist'
-                        ? 'arabic'
-                        : 'all'
-                );
             } catch (err) {
                 logger.error('Failed to initialize library', err);
             } finally {
@@ -363,27 +399,69 @@ function App() {
     }, [token, isLoadingLibrary, selectedPlaylistIds, playlistsData, likedSongsCount, provider, loadScopeTracks]);
 
     // =========================================================================
-    // DEDUPLICATED VS RAW TRACKS IN SCOPE + DUPLICATE STATUS MAP
+    // EVALUATE ARABIC DETECTION (PASS 1 REGEX + PASS 3 GENRES) & DUPLICATE CLUSTERS
     // =========================================================================
+    const evaluatedRawTracks = useMemo(() => {
+        const strictMode = Boolean(advancedOptions.strictArabicExtraction);
+        return rawScopeTracks.map(item => {
+            const artistGenres = [];
+            if (!strictMode && Array.isArray(item.track?.artists)) {
+                item.track.artists.forEach(a => {
+                    const cached = genreCacheRef.current.get(a?.id);
+                    if (cached) artistGenres.push(...cached);
+                });
+            }
+            const arabicReason = ArabicDetector.detectTrack(item, { strictMode, artistGenres });
+            return {
+                ...item,
+                _arabicReason: arabicReason,
+                _isArabic: Boolean(arabicReason)
+            };
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rawScopeTracks, advancedOptions.strictArabicExtraction, genreCacheVersion]);
+
+    // Update global Arabic match badge when viewing 'ALL'
+    useEffect(() => {
+        if (selectedPlaylistIds.has('ALL') && evaluatedRawTracks.length > 0) {
+            const uniqueArabicIds = new Set(
+                evaluatedRawTracks.filter(t => t._isArabic).map(t => t.track.id)
+            );
+            setAllLibraryArabicCount(uniqueArabicIds.size);
+        }
+    }, [selectedPlaylistIds, evaluatedRawTracks]);
+
     const { scopeTracks, duplicateStatusMap, duplicateRemoveCount } = useMemo(() => {
-        // Compute duplicate groups across rawScopeTracks
-        const isCombined = selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size > 1;
-        const dupeGroups = DuplicateDetector.findDuplicates(rawScopeTracks, {
-            isCombined,
-            scope: isCombined ? 'global' : 'playlist',
-            matchDuration
+        const isMultiScope = selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size > 1;
+        const effectiveScope = isMultiScope ? advancedOptions.scope : 'per';
+
+        const dupeClusters = DuplicateDetector.clusterTracks(evaluatedRawTracks, {
+            matchCriteria: advancedOptions.matchCriteria,
+            durationTolerance: advancedOptions.durationTolerance,
+            scope: effectiveScope
         });
 
         const statusMap = {};
         let removeCount = 0;
+        const duplicateInstanceOrder = [];
 
-        dupeGroups.forEach(group => {
-            const sorted = [...group].sort((a, b) => {
-                if (duplicateStrategy === 'popular') {
+        dupeClusters.forEach(cluster => {
+            const sorted = [...cluster].sort((a, b) => {
+                if (advancedOptions.keepStrategy === 'popular') {
                     return (b.track?.popularity || 0) - (a.track?.popularity || 0);
                 }
-                return (a._releaseYear || 9999) - (b._releaseYear || 9999);
+                const dateA = a._addedAtMs || 0;
+                const dateB = b._addedAtMs || 0;
+                if (dateA !== dateB && dateA > 0 && dateB > 0) {
+                    return advancedOptions.keepStrategy === 'newest'
+                        ? dateB - dateA
+                        : dateA - dateB;
+                }
+                return advancedOptions.keepStrategy === 'newest'
+                    ? (b._releaseYear || 0) - (a._releaseYear || 0)
+                    : (a._releaseYear || 9999) - (b._releaseYear || 9999);
             });
+
             sorted.forEach((item, idx) => {
                 if (idx === 0) {
                     statusMap[item._selectionKey] = 'KEEP';
@@ -391,24 +469,23 @@ function App() {
                     statusMap[item._selectionKey] = 'REMOVE';
                     removeCount++;
                 }
+                duplicateInstanceOrder.push(item);
             });
         });
 
-        // In 'duplicates' workflow, show every duplicate track instance so user sees KEEP vs REMOVE copies
+        // In 'duplicates' workflow, show every duplicate cluster instance in grouped order (KEEP followed by REMOVE)
         if (activeWorkflow === 'duplicates') {
-            const onlyDupes = rawScopeTracks.filter(item => Boolean(statusMap[item._selectionKey]));
             return {
-                scopeTracks: onlyDupes,
+                scopeTracks: duplicateInstanceOrder,
                 duplicateStatusMap: statusMap,
                 duplicateRemoveCount: removeCount
             };
         }
 
-        // In other workflows, merge identical track IDs when scanning multiple playlists ('ALL')
-        // so the user doesn't get duplicate songs in their extracted Arabic playlist,
-        // while preserving all source playlist names for Excel export!
+        // In other workflows, deduplicate identical track IDs when scanning multiple playlists ('ALL')
+        // while preserving all source playlist names for Excel export
         const byTrackId = new Map();
-        rawScopeTracks.forEach(item => {
+        evaluatedRawTracks.forEach(item => {
             const tid = item.track?.id;
             if (!tid) return;
             const plName = item.sourcePlaylist?.name || 'Playlist';
@@ -430,11 +507,13 @@ function App() {
             duplicateStatusMap: statusMap,
             duplicateRemoveCount: removeCount
         };
-    }, [rawScopeTracks, selectedPlaylistIds, matchDuration, duplicateStrategy, activeWorkflow]);
+    }, [evaluatedRawTracks, selectedPlaylistIds, advancedOptions, activeWorkflow]);
 
     // =========================================================================
-    // FILTERED & SORTED TRACKS
+    // FILTERED & SORTED TRACKS (Driven Directly by Active Workflow + Search)
     // =========================================================================
+    const isArabicWorkflow = activeWorkflow === 'arabic-all' || activeWorkflow === 'arabic-playlist';
+
     const filteredTracks = useMemo(() => {
         const q = trackSearch.trim().toLowerCase();
 
@@ -442,9 +521,8 @@ function App() {
             const t = item.track;
             if (!t) return false;
 
-            if (activeFilterChip === 'arabic' && !item._isArabic) return false;
-            if (activeFilterChip === '2020s' && item._releaseYear < 2020) return false;
-            if (activeFilterChip === 'classic' && (item._releaseYear === 0 || item._releaseYear > 2005)) return false;
+            // In Arabic workflows, show only Arabic matches
+            if (isArabicWorkflow && !item._isArabic) return false;
 
             if (activeArtistFilter) {
                 const matchesArtist = includeCollabs
@@ -462,7 +540,8 @@ function App() {
                 const artistStr = t.artists?.map(a => a.name).join(' ') || '';
                 const albumStr = t.album?.name || '';
                 const reasonStr = item._arabicReason || '';
-                const haystack = `${t.name} ${artistStr} ${albumStr} ${reasonStr}`.toLowerCase();
+                const plStr = item.sourcePlaylist?.name || '';
+                const haystack = `${t.name} ${artistStr} ${albumStr} ${reasonStr} ${plStr}`.toLowerCase();
                 if (!haystack.includes(q)) return false;
             }
 
@@ -484,7 +563,7 @@ function App() {
         return list;
     }, [
         scopeTracks,
-        activeFilterChip,
+        isArabicWorkflow,
         activeArtistFilter,
         activeDecadeFilter,
         includeCollabs,
@@ -492,7 +571,7 @@ function App() {
         sortBy
     ]);
 
-    // Auto-select appropriate tracks when workflow, filter, or duplicate strategy changes
+    // Auto-select appropriate tracks when workflow, options, or filtered tracks change
     useEffect(() => {
         if (activeWorkflow === 'duplicates') {
             const toRemove = new Set(
@@ -505,7 +584,7 @@ function App() {
             const allVisible = new Set(filteredTracks.map(item => item._selectionKey));
             setSelectedKeys(allVisible);
         }
-    }, [activeWorkflow, activeFilterChip, duplicateStrategy, matchDuration, filteredTracks, duplicateStatusMap]);
+    }, [activeWorkflow, advancedOptions, filteredTracks, duplicateStatusMap]);
 
     // =========================================================================
     // INSIGHTS & STATS CALCULATIONS
@@ -537,7 +616,6 @@ function App() {
 
         if (workflow === 'arabic-all') {
             setSelectedPlaylistIds(new Set(['ALL']));
-            setActiveFilterChip('arabic');
             setNewPlaylistName('🌙 Extracted Arabic Favorites');
         } else if (workflow === 'arabic-playlist') {
             if (selectedPlaylistIds.has('ALL')) {
@@ -546,12 +624,7 @@ function App() {
                     : (playlistsData[0]?.id || 'ALL');
                 setSelectedPlaylistIds(new Set([firstSpecificId]));
             }
-            setActiveFilterChip('arabic');
             setNewPlaylistName('🎯 Extracted Arabic Playlist');
-        } else if (workflow === 'duplicates') {
-            setActiveFilterChip('all');
-        } else if (workflow === 'insights') {
-            setActiveFilterChip('all');
         }
     };
 
@@ -683,8 +756,8 @@ function App() {
                 tracks: { total: uris.length },
                 owner: { id: userId, display_name: profile?.display_name || 'You' }
             };
-            tracksCacheRef.current[created.id] = selectedTrackItems.map(item =>
-                enrichTrackItem(item, { id: created.id, name: title })
+            tracksCacheRef.current[created.id] = selectedTrackItems.map((item, idx) =>
+                enrichTrackItem(item, { id: created.id, name: title }, idx)
             );
             setPlaylistsData(prev => [newPlObj, ...prev]);
             setActiveModal(null);
@@ -730,12 +803,12 @@ function App() {
 
         setIsSubmittingModal(true);
         try {
-            // Group URIs by sourcePlaylist.id
+            // Group URIs by sourcePlaylist.id (Supports both regular playlists and LIKED_SONGS!)
             const byPlaylist = {};
             selectedTrackItems.forEach(item => {
                 const pid = item.sourcePlaylist?.id;
                 const uri = DuplicateDetector.extractUriFromKey(item._selectionKey) || item.track?.uri;
-                if (!pid || !uri || pid === PLAYLIST_IDS.LIKED_SONGS) return;
+                if (!pid || !uri) return;
                 if (!byPlaylist[pid]) byPlaylist[pid] = [];
                 byPlaylist[pid].push(uri);
             });
@@ -744,9 +817,13 @@ function App() {
             for (const pid of playlistIds) {
                 await provider.removeTracksFromPlaylist(token, pid, byPlaylist[pid]);
                 if (tracksCacheRef.current[pid]) {
-                    const removedSet = new Set(byPlaylist[pid]);
+                    const removedKeysForPl = new Set(
+                        selectedTrackItems
+                            .filter(i => i.sourcePlaylist?.id === pid)
+                            .map(i => i._selectionKey)
+                    );
                     tracksCacheRef.current[pid] = tracksCacheRef.current[pid].filter(
-                        item => !removedSet.has(item.track?.uri)
+                        item => !removedKeysForPl.has(item._selectionKey)
                     );
                 }
             }
@@ -755,7 +832,7 @@ function App() {
             setRawScopeTracks(prev => prev.filter(item => !removedKeys.has(item._selectionKey)));
             setSelectedKeys(new Set());
             setActiveModal(null);
-            showToast(`Removed ${selectedTrackItems.length} tracks!`);
+            showToast(`Removed ${selectedTrackItems.length} tracks across ${playlistIds.length} playlist(s)!`);
         } catch (err) {
             logger.error('Failed to remove tracks', err);
             showToast(`Error removing tracks: ${err.message || 'Check permissions'}`);
@@ -840,10 +917,12 @@ function App() {
         return names.join(' + ');
     }, [selectedPlaylistIds, playlistsData]);
 
-    const scopeArabicCount = useMemo(
-        () => scopeTracks.filter(t => t._isArabic).length,
-        [scopeTracks]
-    );
+    const scopeArabicCount = useMemo(() => {
+        const uniqueArabicIds = new Set(
+            evaluatedRawTracks.filter(t => t._isArabic).map(t => t.track.id)
+        );
+        return uniqueArabicIds.size;
+    }, [evaluatedRawTracks]);
 
     const isServerOffline = serverMessage.includes('Backend not connected');
 
@@ -929,7 +1008,7 @@ function App() {
                                     <div>
                                         <div className="v2-qa-title">Extract Arabic from a Playlist</div>
                                         <div className="v2-qa-sub" style={{ whiteSpace: 'normal' }}>
-                                            3-tier detection: Arabic script, Franco-Arab keywords, &amp; MENA artist registry.
+                                            Multi-pass detection: Arabic script, Franco-Arab, MENA artists &amp; Spotify genres.
                                         </div>
                                     </div>
                                 </button>
@@ -942,7 +1021,7 @@ function App() {
                                     <div>
                                         <div className="v2-qa-title">1-Click Duplicate Cleaner</div>
                                         <div className="v2-qa-sub" style={{ whiteSpace: 'normal' }}>
-                                            Smart auto-select keeps your oldest or most popular copy and removes extras.
+                                            Strict or Fuzzy clustering keeps your oldest/newest copy and removes extras.
                                         </div>
                                     </div>
                                 </button>
@@ -1013,7 +1092,7 @@ function App() {
                             <div className="v2-user-meta">
                                 <div className="v2-user-name">{profile?.display_name || 'Connected'}</div>
                                 <div className="v2-user-sub">
-                                    {playlistsData.length} Playlists • {scopeTracks.length} Tracks
+                                    {playlistsData.length} Playlists • {rawScopeTracks.length} Loaded
                                 </div>
                             </div>
                             <button onClick={handleLogout} className="v2-btn-logout">
@@ -1164,10 +1243,9 @@ function App() {
                             <div className="v2-view-title-wrap">
                                 <div className="v2-view-title-row">
                                     <h2 className="v2-view-title">
-                                        {(activeWorkflow === 'arabic-all' || activeFilterChip === 'arabic') && `🌙 Arabic Tracks — ${scopeDisplayName}`}
+                                        {isArabicWorkflow && `🌙 Arabic Tracks — ${scopeDisplayName}`}
                                         {activeWorkflow === 'duplicates' && `🧹 Duplicate Tracks — ${scopeDisplayName}`}
-                                        {activeWorkflow === 'insights' && activeFilterChip !== 'arabic' && `📊 Insights & Breakdown — ${scopeDisplayName}`}
-                                        {activeWorkflow === 'arabic-playlist' && activeFilterChip !== 'arabic' && scopeDisplayName}
+                                        {activeWorkflow === 'insights' && `📊 Insights & Breakdown — ${scopeDisplayName}`}
                                     </h2>
                                     <span className="v2-count-badge brand-bg">
                                         {filteredTracks.length} Songs
@@ -1175,8 +1253,8 @@ function App() {
                                 </div>
                                 <p className="v2-view-subtitle">
                                     {activeWorkflow === 'duplicates'
-                                        ? 'Smart Duplicate Cleaner: Extra copies are auto-selected for 1-click removal'
-                                        : '3-Tier Detection: Arabic Script, Franco-Arab Keywords & MENA Artists'}
+                                        ? `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`
+                                        : `${advancedOptions.strictArabicExtraction ? 'Strict Arabic Mode (Title & Known Artists Only)' : 'Standard 3-Pass Detection: Script, Franco-Arab, Known Artists & Spotify Genres'}`}
                                 </p>
                             </div>
 
@@ -1210,16 +1288,181 @@ function App() {
                             </div>
                         </div>
 
-                        {/* Inline Search + Instant Filter Chips + Sort Bar */}
+                        {/* COLLAPSIBLE ADVANCED OPTIONS CONFIGURATION PANEL (From SpotifyToolkit 2.0) */}
+                        <div className="v2-adv-panel">
+                            <button
+                                onClick={() => setIsAdvOpen(prev => !prev)}
+                                className="v2-adv-header"
+                            >
+                                <div className="v2-adv-header-left">
+                                    <span style={{ fontSize: '0.9rem' }}>⚙️</span>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Advanced Options</span>
+                                    <span className="v2-provider-badge brand-pill">Configure</span>
+                                    <span className="v2-adv-summary">
+                                        {advancedOptions.matchCriteria === 'fuzzy'
+                                            ? `Fuzzy • ±${advancedOptions.durationTolerance}s • `
+                                            : 'Strict ID • '}
+                                        Keep {advancedOptions.keepStrategy} •{' '}
+                                        {advancedOptions.scope === 'cross' ? 'Cross-playlist' : 'Per-playlist'} •{' '}
+                                        {advancedOptions.strictArabicExtraction ? 'Strict Arabic' : 'Standard Arabic (with Genres)'}
+                                    </span>
+                                </div>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                    {isAdvOpen ? '▲ Hide' : '▼ Configure'}
+                                </span>
+                            </button>
+
+                            {isAdvOpen && (
+                                <div className="v2-adv-body">
+                                    {/* 1. Match Criteria */}
+                                    <div className="v2-adv-col">
+                                        <h4 className="v2-adv-title">Match Criteria</h4>
+                                        <div className="v2-toggle-pill-group">
+                                            <button
+                                                onClick={() => updateAdvancedOption('matchCriteria', 'strict')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'strict' ? 'active' : ''}`}
+                                            >
+                                                Strict
+                                            </button>
+                                            <button
+                                                onClick={() => updateAdvancedOption('matchCriteria', 'fuzzy')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'fuzzy' ? 'active' : ''}`}
+                                            >
+                                                Fuzzy
+                                            </button>
+                                        </div>
+                                        <p className="v2-adv-desc">
+                                            {advancedOptions.matchCriteria === 'strict'
+                                                ? 'Match exact Spotify track IDs only.'
+                                                : 'Match by normalized track name, artist & duration.'}
+                                        </p>
+                                    </div>
+
+                                    {/* 2. Duration Tolerance */}
+                                    <div className="v2-adv-col">
+                                        <h4 className="v2-adv-title">
+                                            Duration Tolerance (±{advancedOptions.durationTolerance}s)
+                                        </h4>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+                                            <input
+                                                type="range"
+                                                min="0"
+                                                max="5"
+                                                step="1"
+                                                disabled={advancedOptions.matchCriteria === 'strict'}
+                                                value={advancedOptions.durationTolerance}
+                                                onChange={e => updateAdvancedOption('durationTolerance', parseInt(e.target.value, 10))}
+                                                style={{ flex: 1, accentColor: 'var(--brand)', cursor: 'pointer' }}
+                                            />
+                                            <span style={{ fontSize: '0.76rem', fontWeight: 700 }}>
+                                                ±{advancedOptions.durationTolerance}s
+                                            </span>
+                                        </div>
+                                        <p className="v2-adv-desc">
+                                            Allow duration difference when fuzzy matching duplicates.
+                                        </p>
+                                    </div>
+
+                                    {/* 3. Deduplication Scope */}
+                                    <div className="v2-adv-col">
+                                        <h4 className="v2-adv-title">Deduplication Scope</h4>
+                                        <div className="v2-toggle-pill-group">
+                                            <button
+                                                onClick={() => updateAdvancedOption('scope', 'cross')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.scope === 'cross' ? 'active' : ''}`}
+                                            >
+                                                Cross-List
+                                            </button>
+                                            <button
+                                                onClick={() => updateAdvancedOption('scope', 'per')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.scope === 'per' ? 'active' : ''}`}
+                                            >
+                                                Per-List
+                                            </button>
+                                        </div>
+                                        <p className="v2-adv-desc">
+                                            {advancedOptions.scope === 'cross'
+                                                ? 'Find duplicates across all selected playlists.'
+                                                : 'Only find duplicates within the same playlist.'}
+                                        </p>
+                                    </div>
+
+                                    {/* 4. Default Keep Strategy */}
+                                    <div className="v2-adv-col">
+                                        <h4 className="v2-adv-title">Default Keep Strategy</h4>
+                                        <div className="v2-toggle-pill-group">
+                                            <button
+                                                onClick={() => updateAdvancedOption('keepStrategy', 'oldest')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'oldest' ? 'active' : ''}`}
+                                            >
+                                                Oldest
+                                            </button>
+                                            <button
+                                                onClick={() => updateAdvancedOption('keepStrategy', 'newest')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'newest' ? 'active' : ''}`}
+                                            >
+                                                Newest
+                                            </button>
+                                            <button
+                                                onClick={() => updateAdvancedOption('keepStrategy', 'popular')}
+                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'popular' ? 'active' : ''}`}
+                                            >
+                                                Popular
+                                            </button>
+                                        </div>
+                                        <p className="v2-adv-desc">
+                                            Determines which copy is marked KEEP vs REMOVE.
+                                        </p>
+                                    </div>
+
+                                    {/* 5. Strict Arabic Extraction */}
+                                    <div className="v2-adv-col-full">
+                                        <div>
+                                            <h4 className="v2-adv-title">Strict Arabic Extraction</h4>
+                                            <p className="v2-adv-desc">
+                                                Exclude purely English songs by Arabic artists. Ignores artist name script and Spotify artist genres, relying only on Track Title or explicitly known artists.
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={() => updateAdvancedOption('strictArabicExtraction', !advancedOptions.strictArabicExtraction)}
+                                            className={`v2-switch ${advancedOptions.strictArabicExtraction ? 'on' : ''}`}
+                                            title="Toggle Strict Arabic Extraction"
+                                        >
+                                            <span className="v2-switch-knob" />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Inline Search + Sort + Selection Summary Bar (No Redundant Filter Chips!) */}
                         <div className="v2-toolbar">
                             <div className="v2-toolbar-top">
                                 <input
                                     type="text"
                                     value={trackSearch}
                                     onChange={e => setTrackSearch(e.target.value)}
-                                    placeholder="Filter by song title, artist (Amr Diab, Wegz, Cairokee, Fairuz), or album..."
+                                    placeholder="Search by song title, artist, album, or match reason..."
                                     className="v2-input"
                                 />
+
+                                {activeArtistFilter && (
+                                    <button
+                                        onClick={() => setActiveArtistFilter(null)}
+                                        className="v2-chip v2-chip-filter-active"
+                                    >
+                                        🎤 {activeArtistFilter} ✕
+                                    </button>
+                                )}
+
+                                {activeDecadeFilter !== null && (
+                                    <button
+                                        onClick={() => setActiveDecadeFilter(null)}
+                                        className="v2-chip v2-chip-filter-active"
+                                    >
+                                        📅 {activeDecadeFilter}s ✕
+                                    </button>
+                                )}
 
                                 <select
                                     value={sortBy}
@@ -1239,93 +1482,12 @@ function App() {
                                         ? 'Deselect All'
                                         : 'Select All'}
                                 </button>
-                            </div>
 
-                            <div className="v2-chips-row">
-                                <div className="v2-chips-scroll">
-                                    <button
-                                        onClick={() => setActiveFilterChip('all')}
-                                        className={`v2-chip ${activeFilterChip === 'all' ? 'active' : ''}`}
-                                    >
-                                        All Songs
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveFilterChip('arabic')}
-                                        className={`v2-chip ${activeFilterChip === 'arabic' ? 'active' : ''}`}
-                                    >
-                                        🌙 Arabic Only
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveFilterChip('2020s')}
-                                        className={`v2-chip ${activeFilterChip === '2020s' ? 'active' : ''}`}
-                                    >
-                                        🔥 2020s Era
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveFilterChip('classic')}
-                                        className={`v2-chip ${activeFilterChip === 'classic' ? 'active' : ''}`}
-                                    >
-                                        📼 90s &amp; Classics
-                                    </button>
-
-                                    {activeArtistFilter && (
-                                        <button
-                                            onClick={() => setActiveArtistFilter(null)}
-                                            className="v2-chip v2-chip-filter-active"
-                                        >
-                                            🎤 Artist: {activeArtistFilter} ✕
-                                        </button>
-                                    )}
-
-                                    {activeDecadeFilter !== null && (
-                                        <button
-                                            onClick={() => setActiveDecadeFilter(null)}
-                                            className="v2-chip v2-chip-filter-active"
-                                        >
-                                            📅 Era: {activeDecadeFilter}s ✕
-                                        </button>
-                                    )}
-                                </div>
-
-                                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
                                     {selectedTrackItems.length} of {filteredTracks.length} selected
                                 </span>
                             </div>
                         </div>
-
-                        {/* SMART DUPLICATE STRATEGY BAR (Visible in Clean Duplicates Workflow) */}
-                        {activeWorkflow === 'duplicates' && (
-                            <div className="v2-dupe-bar">
-                                <div style={{ fontSize: '0.76rem', color: '#fde68a' }}>
-                                    🧹 <strong>Smart Duplicate Cleaner:</strong> Choose which copy to{' '}
-                                    <span style={{ color: '#34d399', fontWeight: 700 }}>KEEP</span>; extra copies are auto-selected to{' '}
-                                    <span style={{ color: '#f87171', fontWeight: 700 }}>REMOVE</span>.
-                                </div>
-                                <div className="v2-dupe-controls">
-                                    <button
-                                        onClick={() => setDuplicateStrategy('oldest')}
-                                        className={`v2-strat-btn ${duplicateStrategy === 'oldest' ? 'active' : ''}`}
-                                    >
-                                        Keep Oldest Copy
-                                    </button>
-                                    <button
-                                        onClick={() => setDuplicateStrategy('popular')}
-                                        className={`v2-strat-btn ${duplicateStrategy === 'popular' ? 'active' : ''}`}
-                                    >
-                                        Keep Most Popular
-                                    </button>
-                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.74rem', cursor: 'pointer' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={matchDuration}
-                                            onChange={e => setMatchDuration(e.target.checked)}
-                                            style={{ accentColor: 'var(--brand)' }}
-                                        />
-                                        <span>Exact Duration Match</span>
-                                    </label>
-                                </div>
-                            </div>
-                        )}
 
                         {/* INTERACTIVE INSIGHTS DRAWER (Visible in Insights Workflow) */}
                         {activeWorkflow === 'insights' && (
@@ -1460,29 +1622,34 @@ function App() {
 
                         {/* TRACK LIST CONTAINER */}
                         <div className="v2-tracks-list">
-                            {isLoadingLibrary && filteredTracks.length === 0 ? (
+                            {(isLoadingLibrary || scanProgress) && filteredTracks.length === 0 ? (
                                 <div className="obsidian-card" style={{ padding: '2.5rem', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                                    Loading your music library...
+                                    {scanProgress ? scanProgress.label : 'Loading your music library...'}
                                 </div>
                             ) : filteredTracks.length === 0 ? (
                                 <div className="obsidian-card" style={{ padding: '2.5rem', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                                    No tracks match the current filter. Try clicking <strong>All Songs</strong> or clearing your search.
+                                    {activeWorkflow === 'duplicates'
+                                        ? 'No duplicate tracks found with the current Advanced Options! Try switching Deduplication Scope to Cross-List or Match Criteria to Fuzzy.'
+                                        : 'No tracks match the current filter.'}
                                 </div>
                             ) : (
                                 filteredTracks.map((item, idx) => {
                                     const t = item.track;
                                     const isChecked = selectedKeys.has(item._selectionKey);
-                                    const dupeStatus = duplicateStatusMap[item._selectionKey];
+                                    // ONLY show KEEP / REMOVE badges when in the Clean Duplicates workflow!
+                                    const dupeStatus = activeWorkflow === 'duplicates'
+                                        ? duplicateStatusMap[item._selectionKey]
+                                        : null;
                                     const thumbUrl = t.album?.images?.[t.album.images.length - 1]?.url || t.album?.images?.[0]?.url;
                                     const artistNames = t.artists?.map(a => a.name).join(', ') || 'Unknown Artist';
                                     const releaseYear = item._releaseYear || '';
-                                    const plLabel = item.sourcePlaylists?.length > 1
+                                    const plLabel = activeWorkflow !== 'duplicates' && item.sourcePlaylists?.length > 1
                                         ? `${item.sourcePlaylists[0]} +${item.sourcePlaylists.length - 1}`
                                         : (item.sourcePlaylist?.name || '');
 
                                     return (
                                         <div
-                                            key={item._selectionKey + '_' + idx}
+                                            key={item._selectionKey}
                                             onClick={() => handleToggleTrackKey(item._selectionKey)}
                                             className={`obsidian-card-interactive v2-track-row ${isChecked ? 'selected' : ''}`}
                                         >

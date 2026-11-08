@@ -119,31 +119,72 @@ export const fetchSavedTracks = async (token, offset = 0, limit = 50) => {
 
 export const fetchRemainingTracks = async (token, initialTotal, userId = null, playlistId = null) => {
     const limit = playlistId ? 100 : 50;
-    const promises = [];
+    const urls = [];
 
     for (let offset = limit; offset < initialTotal; offset += limit) {
         const url = playlistId
             ? `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=${limit}`
             : `https://api.spotify.com/v1/me/tracks?offset=${offset}&limit=${limit}`;
-
-        promises.push(
-            fetchWithRetry(url, {
-                method: "GET", headers: { Authorization: `Bearer ${token}` }
-            })
-                .then(res => {
-                    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-                    return res.json();
-                })
-                .then(data => data.items)
-                .catch(err => {
-                    logger.warn(`Failed to fetch batch starting at ${offset}`, err);
-                    return [];
-                })
-        );
+        urls.push({ offset, url });
     }
 
-    const results = await Promise.all(promises);
+    const results = new Array(urls.length);
+    const CONCURRENCY = 4;
+
+    for (let i = 0; i < urls.length; i += CONCURRENCY) {
+        const chunk = urls.slice(i, i + CONCURRENCY);
+        const chunkResults = await Promise.all(
+            chunk.map(({ offset, url }) =>
+                fetchWithRetry(url, {
+                    method: "GET", headers: { Authorization: `Bearer ${token}` }
+                })
+                    .then(res => {
+                        if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+                        return res.json();
+                    })
+                    .then(data => data.items || [])
+                    .catch(err => {
+                        logger.warn(`Failed to fetch batch starting at ${offset}`, err);
+                        return [];
+                    })
+            )
+        );
+        chunkResults.forEach((items, idx) => {
+            results[i + idx] = items;
+        });
+    }
+
     return results.flat().filter(item => item !== null && item !== undefined);
+};
+
+export const fetchArtistsBatch = async (token, artistIds = []) => {
+    if (!artistIds || artistIds.length === 0) return [];
+    const uniqueIds = Array.from(new Set(artistIds.filter(Boolean)));
+    const chunks = [];
+    for (let i = 0; i < uniqueIds.length; i += 50) {
+        chunks.push(uniqueIds.slice(i, i + 50));
+    }
+
+    const artists = [];
+    const CONCURRENCY = 3;
+    for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        const group = chunks.slice(i, i + CONCURRENCY);
+        const responses = await Promise.all(
+            group.map(chunk =>
+                fetchWithRetry(`https://api.spotify.com/v1/artists?ids=${chunk.join(',')}`, {
+                    method: "GET", headers: { Authorization: `Bearer ${token}` }
+                })
+                    .then(res => (res.ok ? res.json() : { artists: [] }))
+                    .then(data => data.artists || [])
+                    .catch(err => {
+                        logger.warn('Failed to fetch artists batch', err);
+                        return [];
+                    })
+            )
+        );
+        artists.push(...responses.flat().filter(Boolean));
+    }
+    return artists;
 };
 
 /**

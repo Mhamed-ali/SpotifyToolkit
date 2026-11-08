@@ -26,6 +26,7 @@ const spotifyProvider = {
     fetchPlaylistTracks: spotifyService.fetchPlaylistTracks,
     fetchRemainingTracks: spotifyService.fetchRemainingTracks,
     fetchAllTracksForPlaylist: spotifyService.fetchAllTracksForPlaylist,
+    fetchArtistsBatch: spotifyService.fetchArtistsBatch,
     fetchAudioFeatures: spotifyService.fetchAudioFeatures,
     removeTracksFromPlaylist: spotifyService.removeTracksFromPlaylist,
     createPlaylist: spotifyService.createPlaylist,
@@ -61,6 +62,7 @@ const anghamiProvider = {
     fetchPlaylistTracks: anghamiService.fetchAnghamiPlaylistTracks,
     fetchRemainingTracks: async () => [],
     fetchAllTracksForPlaylist: anghamiService.fetchAllAnghamiTracksForPlaylist,
+    fetchArtistsBatch: async () => [],
     fetchAudioFeatures: async () => ({ error: { status: 403, message: 'API_RESTRICTED' } }),
     removeTracksFromPlaylist: async () => {
         throw new Error('Anghami SDK currently supports read-only playlist access. Export to Excel instead.');

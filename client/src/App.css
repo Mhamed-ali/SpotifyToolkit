@@ -746,41 +746,136 @@
   font-weight: 600;
 }
 
-/* Duplicate Strategy Bar */
-.v2-dupe-bar {
-  padding: 0.75rem 0.95rem;
+/* Advanced Options Configuration Panel (ported from SpotifyToolkit 2.0) */
+.v2-adv-panel {
+  background: #101015;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  overflow: hidden;
+}
+
+.v2-adv-header {
+  width: 100%;
+  padding: 0.65rem 0.95rem;
+  background: #121218;
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  text-align: left;
+  transition: background 0.15s ease;
 }
 
-.v2-dupe-controls {
+.v2-adv-header:hover {
+  background: #181820;
+}
+
+.v2-adv-header-left {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.55rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
-.v2-strat-btn {
-  padding: 0.32rem 0.65rem;
-  border-radius: 8px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  background: #18181b;
-  color: #e4e4e7;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+.v2-adv-summary {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
 }
 
-.v2-strat-btn.active {
-  background: #fbbf24;
-  color: #000;
-  border-color: #fbbf24;
+.v2-adv-body {
+  padding: 0.95rem;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(14, 14, 19, 0.85);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+
+.v2-adv-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.v2-adv-col-full {
+  grid-column: 1 / -1;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.v2-adv-title {
+  font-size: 0.78rem;
   font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+.v2-adv-desc {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.35;
+}
+
+.v2-toggle-pill-group {
+  display: inline-flex;
+  background: #09090c;
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: fit-content;
+}
+
+.v2-toggle-pill-btn {
+  padding: 0.28rem 0.65rem;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: all 0.14s ease;
+}
+
+.v2-toggle-pill-btn.active {
+  background: var(--brand);
+  color: #000;
+  font-weight: 700;
+}
+
+.v2-switch {
+  width: 44px;
+  height: 24px;
+  border-radius: 9999px;
+  background: #27272a;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.18s ease;
+  padding: 0;
+}
+
+.v2-switch.on {
+  background: var(--brand);
+}
+
+.v2-switch-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.18s ease;
+}
+
+.v2-switch.on .v2-switch-knob {
+  transform: translateX(20px);
 }
 
 /* Insights Drawer */
@@ -1139,7 +1234,8 @@
     padding: 0.85rem 0.85rem 5.5rem;
   }
 
-  .v2-kpi-grid {
+  .v2-kpi-grid,
+  .v2-adv-body {
     grid-template-columns: repeat(2, 1fr);
   }
 
