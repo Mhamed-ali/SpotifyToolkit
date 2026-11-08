@@ -117,7 +117,7 @@ export const fetchSavedTracks = async (token, offset = 0, limit = 50) => {
     return await result.json();
 };
 
-export const fetchRemainingTracks = async (token, initialTotal, userId = null, playlistId = null) => {
+export const fetchRemainingTracks = async (token, initialTotal, userId = null, playlistId = null, onProgress = null) => {
     const limit = playlistId ? 100 : 50;
     const urls = [];
 
@@ -129,7 +129,8 @@ export const fetchRemainingTracks = async (token, initialTotal, userId = null, p
     }
 
     const results = new Array(urls.length);
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 5;
+    let loadedExtra = 0;
 
     for (let i = 0; i < urls.length; i += CONCURRENCY) {
         const chunk = urls.slice(i, i + CONCURRENCY);
@@ -151,7 +152,11 @@ export const fetchRemainingTracks = async (token, initialTotal, userId = null, p
         );
         chunkResults.forEach((items, idx) => {
             results[i + idx] = items;
+            loadedExtra += items.length;
         });
+        if (typeof onProgress === 'function') {
+            onProgress(limit + loadedExtra, initialTotal);
+        }
     }
 
     return results.flat().filter(item => item !== null && item !== undefined);
@@ -190,7 +195,7 @@ export const fetchArtistsBatch = async (token, artistIds = []) => {
 /**
  * DRY Helper: Fetches all tracks (first page + remaining batches) for either a Playlist or Liked Songs.
  */
-export const fetchAllTracksForPlaylist = async (token, playlistId, expectedTotal = null) => {
+export const fetchAllTracksForPlaylist = async (token, playlistId, expectedTotal = null, onProgress = null) => {
     const isLiked = playlistId === PLAYLIST_IDS.LIKED_SONGS;
     const firstPage = isLiked
         ? await fetchSavedTracks(token, 0, 50)
@@ -200,12 +205,17 @@ export const fetchAllTracksForPlaylist = async (token, playlistId, expectedTotal
     const pageLimit = isLiked ? 50 : 100;
     let items = firstPage.items || [];
 
+    if (typeof onProgress === 'function') {
+        onProgress(items.length, total);
+    }
+
     if (total > pageLimit) {
         const remaining = await fetchRemainingTracks(
             token,
             total,
             isLiked ? 'me' : null,
-            isLiked ? null : playlistId
+            isLiked ? null : playlistId,
+            onProgress
         );
         items = [...items, ...remaining];
     }

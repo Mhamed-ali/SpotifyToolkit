@@ -70,6 +70,7 @@ function App() {
     const [selectedKeys, setSelectedKeys] = useState(() => new Set());
     const [scanProgress, setScanProgress] = useState(null); // { current, total, label }
     const [allLibraryArabicCount, setAllLibraryArabicCount] = useState(null);
+    const [visibleLimit, setVisibleLimit] = useState(120);
 
     // =========================================================================
     // MODALS & TOAST STATE
@@ -86,7 +87,9 @@ function App() {
 
     // Caches so switching views/playlists is instant
     const tracksCacheRef = useRef({});
+    const inFlightPromisesRef = useRef({});
     const genreCacheRef = useRef(new Map());
+    const arabicEvalCacheRef = useRef(new Map());
     const loadOperationRef = useRef(0);
     const toastTimerRef = useRef(null);
 
@@ -133,12 +136,16 @@ function App() {
     }, []);
 
     // =========================================================================
-    // FETCH TRACKS FOR A SINGLE PLAYLIST (WITH CACHE)
+    // FETCH TRACKS FOR A SINGLE PLAYLIST (WITH CACHE & IN-FLIGHT DEDUPLICATION)
     // =========================================================================
-    const fetchTracksForPlaylistCached = useCallback(async (activeToken, playlistObj, activeProvider) => {
+    const fetchTracksForPlaylistCached = useCallback(async (activeToken, playlistObj, activeProvider, onBatchProgress = null) => {
         const pid = playlistObj.id;
         if (tracksCacheRef.current[pid]) {
             return tracksCacheRef.current[pid];
+        }
+
+        if (inFlightPromisesRef.current[pid]) {
+            return inFlightPromisesRef.current[pid];
         }
 
         const total = playlistObj.tracks?.total || 0;
@@ -149,27 +156,50 @@ function App() {
             collaborative: playlistObj.collaborative
         };
 
-        let rawItems = [];
-        if (pid === PLAYLIST_IDS.LIKED_SONGS) {
-            const firstPage = await activeProvider.fetchSavedTracks(activeToken, 0, 50);
-            const firstItems = firstPage?.items || [];
-            const actualTotal = firstPage?.total ?? total;
-            if (actualTotal > firstItems.length) {
-                const rest = await activeProvider.fetchRemainingTracks(activeToken, actualTotal, 'me', null);
-                rawItems = [...firstItems, ...(rest || [])];
+        const fetchPromise = (async () => {
+            let rawItems = [];
+            if (pid === PLAYLIST_IDS.LIKED_SONGS) {
+                const firstPage = await activeProvider.fetchSavedTracks(activeToken, 0, 50);
+                const firstItems = firstPage?.items || [];
+                const actualTotal = firstPage?.total ?? total;
+                if (typeof onBatchProgress === 'function') {
+                    onBatchProgress(firstItems.length, actualTotal);
+                }
+                if (actualTotal > firstItems.length) {
+                    const rest = await activeProvider.fetchRemainingTracks(
+                        activeToken,
+                        actualTotal,
+                        'me',
+                        null,
+                        onBatchProgress
+                    );
+                    rawItems = [...firstItems, ...(rest || [])];
+                } else {
+                    rawItems = firstItems;
+                }
             } else {
-                rawItems = firstItems;
+                rawItems = await activeProvider.fetchAllTracksForPlaylist(
+                    activeToken,
+                    pid,
+                    total,
+                    onBatchProgress
+                );
             }
-        } else {
-            rawItems = await activeProvider.fetchAllTracksForPlaylist(activeToken, pid, total);
-        }
 
-        const enriched = (rawItems || [])
-            .map((item, idx) => enrichTrackItem(item, sourceMeta, idx))
-            .filter(Boolean);
+            const enriched = (rawItems || [])
+                .map((item, idx) => enrichTrackItem(item, sourceMeta, idx))
+                .filter(Boolean);
 
-        tracksCacheRef.current[pid] = enriched;
-        return enriched;
+            tracksCacheRef.current[pid] = enriched;
+            delete inFlightPromisesRef.current[pid];
+            return enriched;
+        })().catch(err => {
+            delete inFlightPromisesRef.current[pid];
+            throw err;
+        });
+
+        inFlightPromisesRef.current[pid] = fetchPromise;
+        return fetchPromise;
     }, [enrichTrackItem]);
 
     // =========================================================================
@@ -202,33 +232,76 @@ function App() {
             return;
         }
 
-        const accumulated = [];
         const totalPlaylists = targetPlaylists.length;
 
-        for (let i = 0; i < totalPlaylists; i++) {
-            if (loadOperationRef.current !== opId) return;
-            const pl = targetPlaylists[i];
+        // FAST-PATH: If all target playlists are already in memory cache, combine in 1 render!
+        const allCached = targetPlaylists.every(pl => Boolean(tracksCacheRef.current[pl.id]));
+        let accumulated = [];
 
-            if (!tracksCacheRef.current[pl.id]) {
+        if (allCached) {
+            for (let i = 0; i < totalPlaylists; i++) {
+                accumulated.push(...tracksCacheRef.current[targetPlaylists[i].id]);
+            }
+            setRawScopeTracks(accumulated);
+        } else {
+            // Immediately display any already-cached playlists in targetPlaylists (or clear old playlist)
+            const initialCached = [];
+            for (let i = 0; i < totalPlaylists; i++) {
+                const cached = tracksCacheRef.current[targetPlaylists[i].id];
+                if (cached) initialCached.push(...cached);
+            }
+            setRawScopeTracks(initialCached);
+
+            for (let i = 0; i < totalPlaylists; i++) {
+                if (loadOperationRef.current !== opId) return;
+                const pl = targetPlaylists[i];
+
+                if (tracksCacheRef.current[pl.id]) {
+                    accumulated.push(...tracksCacheRef.current[pl.id]);
+                    continue;
+                }
+
+                const expectedPlTotal = pl.tracks?.total || 0;
+                const baseAccumulatedCount = accumulated.length;
+
                 setScanProgress({
                     phase: 'tracks',
                     phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
                     playlistName: pl.name,
                     current: i + 1,
                     total: totalPlaylists,
-                    tracksAnalyzed: accumulated.length,
+                    tracksAnalyzed: baseAccumulatedCount,
                     label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
-                    subLabel: `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
+                    subLabel: expectedPlTotal > 100
+                        ? `Scanning 0 / ${expectedPlTotal.toLocaleString()} tracks in "${pl.name}"...`
+                        : `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
                 });
-            }
 
-            try {
-                const items = await fetchTracksForPlaylistCached(activeToken, pl, activeProvider);
-                if (loadOperationRef.current !== opId) return;
-                accumulated.push(...items);
-                setRawScopeTracks([...accumulated]);
-            } catch (err) {
-                logger.warn(`Skipping playlist ${pl.name}`, err);
+                try {
+                    const items = await fetchTracksForPlaylistCached(
+                        activeToken,
+                        pl,
+                        activeProvider,
+                        (loadedInPl, totalInPl) => {
+                            if (loadOperationRef.current !== opId) return;
+                            setScanProgress({
+                                phase: 'tracks',
+                                phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
+                                playlistName: pl.name,
+                                current: i + Math.min(0.95, loadedInPl / Math.max(1, totalInPl)),
+                                total: totalPlaylists,
+                                tracksAnalyzed: baseAccumulatedCount + loadedInPl,
+                                label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
+                                subLabel: `Scanning ${loadedInPl.toLocaleString()} / ${totalInPl.toLocaleString()} tracks in "${pl.name}"...`
+                            });
+                        }
+                    );
+                    if (loadOperationRef.current !== opId) return;
+                    accumulated.push(...items);
+                    setRawScopeTracks([...accumulated]);
+                } catch (err) {
+                    logger.warn(`Skipping playlist ${pl.name}`, err);
+                }
             }
         }
 
@@ -258,7 +331,7 @@ function App() {
                 total: totalPlaylists,
                 tracksAnalyzed: accumulated.length,
                 label: `Analyzing genres for ${uniqueMissingArtistIds.length} artists...`,
-                subLabel: `Cross-referencing Spotify MENA & Arabic genre tags across ${accumulated.length} analyzed tracks`
+                subLabel: `Cross-referencing Spotify MENA & Arabic genre tags across ${accumulated.length.toLocaleString()} analyzed tracks`
             });
 
             try {
@@ -289,7 +362,9 @@ function App() {
         setPlaylistsData([]);
         setRawScopeTracks([]);
         tracksCacheRef.current = {};
+        inFlightPromisesRef.current = {};
         genreCacheRef.current.clear();
+        arabicEvalCacheRef.current.clear();
         localStorage.removeItem('spotify_access_token');
         localStorage.removeItem('spotify_refresh_token');
         localStorage.removeItem('music_provider');
@@ -413,15 +488,29 @@ function App() {
     // =========================================================================
     const evaluatedRawTracks = useMemo(() => {
         const strictMode = Boolean(advancedOptions.strictArabicExtraction);
+        const evalCache = arabicEvalCacheRef.current;
+
         return rawScopeTracks.map(item => {
-            const artistGenres = [];
-            if (!strictMode && Array.isArray(item.track?.artists)) {
-                item.track.artists.forEach(a => {
-                    const cached = genreCacheRef.current.get(a?.id);
-                    if (cached) artistGenres.push(...cached);
-                });
+            const tid = item?.track?.id || item?.track?.uri || '';
+            const cacheKey = tid ? `${tid}::${strictMode ? 1 : 0}::${genreCacheVersion}` : null;
+
+            let arabicReason;
+            if (cacheKey && evalCache.has(cacheKey)) {
+                arabicReason = evalCache.get(cacheKey);
+            } else {
+                const artistGenres = [];
+                if (!strictMode && Array.isArray(item.track?.artists)) {
+                    item.track.artists.forEach(a => {
+                        const cached = genreCacheRef.current.get(a?.id);
+                        if (cached) artistGenres.push(...cached);
+                    });
+                }
+                arabicReason = ArabicDetector.detectTrack(item, { strictMode, artistGenres });
+                if (cacheKey) {
+                    evalCache.set(cacheKey, arabicReason);
+                }
             }
-            const arabicReason = ArabicDetector.detectTrack(item, { strictMode, artistGenres });
+
             return {
                 ...item,
                 _arabicReason: arabicReason,
@@ -623,9 +712,12 @@ function App() {
         setActiveWorkflow(workflow);
         setActiveArtistFilter(null);
         setActiveDecadeFilter(null);
+        setVisibleLimit(120);
 
         if (workflow === 'arabic-all') {
-            setSelectedPlaylistIds(new Set(['ALL']));
+            if (!selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size !== 1) {
+                setSelectedPlaylistIds(new Set(['ALL']));
+            }
             setNewPlaylistName('🌙 Extracted Arabic Favorites');
         } else if (workflow === 'arabic-playlist') {
             if (selectedPlaylistIds.has('ALL')) {
@@ -639,8 +731,12 @@ function App() {
     };
 
     const handlePlaylistClick = (id) => {
+        setVisibleLimit(120);
         if (id === 'ALL') {
-            setSelectedPlaylistIds(new Set(['ALL']));
+            setIsMultiSelectMode(false);
+            if (!selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size !== 1) {
+                setSelectedPlaylistIds(new Set(['ALL']));
+            }
             return;
         }
 
@@ -655,7 +751,9 @@ function App() {
             }
             setSelectedPlaylistIds(next);
         } else {
-            setSelectedPlaylistIds(new Set([id]));
+            if (!selectedPlaylistIds.has(id) || selectedPlaylistIds.size !== 1) {
+                setSelectedPlaylistIds(new Set([id]));
+            }
         }
     };
 
@@ -1207,12 +1305,13 @@ function App() {
                                     const isSelected = selectedPlaylistIds.has(pl.id);
                                     return (
                                         <button
+                                            type="button"
                                             key={pl.id}
                                             onClick={() => handlePlaylistClick(pl.id)}
                                             className={`v2-playlist-item ${isSelected ? 'selected' : ''}`}
                                         >
                                             <div className="v2-playlist-item-left">
-                                                {isMultiSelectMode && pl.id !== 'ALL' ? (
+                                                {isMultiSelectMode ? (
                                                     <input
                                                         type="checkbox"
                                                         checked={isSelected}
@@ -1697,72 +1796,98 @@ function App() {
                                         : 'No tracks match the current filter.'}
                                 </div>
                             ) : (
-                                filteredTracks.map((item, idx) => {
-                                    const t = item.track;
-                                    const isChecked = selectedKeys.has(item._selectionKey);
-                                    // ONLY show KEEP / REMOVE badges when in the Clean Duplicates workflow!
-                                    const dupeStatus = activeWorkflow === 'duplicates'
-                                        ? duplicateStatusMap[item._selectionKey]
-                                        : null;
-                                    const thumbUrl = t.album?.images?.[t.album.images.length - 1]?.url || t.album?.images?.[0]?.url;
-                                    const artistNames = t.artists?.map(a => a.name).join(', ') || 'Unknown Artist';
-                                    const releaseYear = item._releaseYear || '';
-                                    const plLabel = activeWorkflow !== 'duplicates' && item.sourcePlaylists?.length > 1
-                                        ? `${item.sourcePlaylists[0]} +${item.sourcePlaylists.length - 1}`
-                                        : (item.sourcePlaylist?.name || '');
+                                <>
+                                    {filteredTracks.slice(0, visibleLimit).map((item, idx) => {
+                                        const t = item.track;
+                                        const isChecked = selectedKeys.has(item._selectionKey);
+                                        // ONLY show KEEP / REMOVE badges when in the Clean Duplicates workflow!
+                                        const dupeStatus = activeWorkflow === 'duplicates'
+                                            ? duplicateStatusMap[item._selectionKey]
+                                            : null;
+                                        const thumbUrl = t.album?.images?.[t.album.images.length - 1]?.url || t.album?.images?.[0]?.url;
+                                        const artistNames = t.artists?.map(a => a.name).join(', ') || 'Unknown Artist';
+                                        const releaseYear = item._releaseYear || '';
+                                        const plLabel = activeWorkflow !== 'duplicates' && item.sourcePlaylists?.length > 1
+                                            ? `${item.sourcePlaylists[0]} +${item.sourcePlaylists.length - 1}`
+                                            : (item.sourcePlaylist?.name || '');
 
-                                    return (
-                                        <div
-                                            key={item._selectionKey}
-                                            onClick={() => handleToggleTrackKey(item._selectionKey)}
-                                            className={`obsidian-card-interactive v2-track-row ${isChecked ? 'selected' : ''}`}
-                                        >
-                                            <div className="v2-track-left">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isChecked}
-                                                    onChange={() => {}}
-                                                    style={{ width: 15, height: 15, accentColor: 'var(--brand)', flexShrink: 0, cursor: 'pointer' }}
-                                                />
-                                                {thumbUrl ? (
-                                                    <img src={thumbUrl} alt="" className="v2-track-thumb" loading="lazy" />
-                                                ) : (
-                                                    <div className="v2-track-thumb">{idx + 1}</div>
-                                                )}
-                                                <div className="v2-track-info">
-                                                    <div className="v2-track-title-line">
-                                                        <span className="v2-track-title">{t.name}</span>
-                                                        {dupeStatus === 'KEEP' && <span className="v2-badge-keep">KEEP</span>}
-                                                        {dupeStatus === 'REMOVE' && <span className="v2-badge-remove">REMOVE</span>}
-                                                        {item._arabicReason && (
-                                                            <span className="v2-badge-reason brand-pill">{item._arabicReason}</span>
-                                                        )}
-                                                    </div>
-                                                    <div className="v2-track-sub">
-                                                        <strong style={{ color: '#e4e4e7', fontWeight: 500 }}>{artistNames}</strong>
-                                                        {t.album?.name ? ` • ${t.album.name}` : ''}
-                                                        {releaseYear ? ` (${releaseYear})` : ''}
-                                                        {plLabel && (
-                                                            <>
-                                                                {' • '}
-                                                                <span className="brand-text">{plLabel}</span>
-                                                            </>
-                                                        )}
+                                        return (
+                                            <div
+                                                key={item._selectionKey}
+                                                onClick={() => handleToggleTrackKey(item._selectionKey)}
+                                                className={`obsidian-card-interactive v2-track-row ${isChecked ? 'selected' : ''}`}
+                                            >
+                                                <div className="v2-track-left">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isChecked}
+                                                        onChange={() => {}}
+                                                        style={{ width: 15, height: 15, accentColor: 'var(--brand)', flexShrink: 0, cursor: 'pointer' }}
+                                                    />
+                                                    {thumbUrl ? (
+                                                        <img src={thumbUrl} alt="" className="v2-track-thumb" loading="lazy" />
+                                                    ) : (
+                                                        <div className="v2-track-thumb">{idx + 1}</div>
+                                                    )}
+                                                    <div className="v2-track-info">
+                                                        <div className="v2-track-title-line">
+                                                            <span className="v2-track-title">{t.name}</span>
+                                                            {dupeStatus === 'KEEP' && <span className="v2-badge-keep">KEEP</span>}
+                                                            {dupeStatus === 'REMOVE' && <span className="v2-badge-remove">REMOVE</span>}
+                                                            {item._arabicReason && (
+                                                                <span className="v2-badge-reason brand-pill">{item._arabicReason}</span>
+                                                            )}
+                                                        </div>
+                                                        <div className="v2-track-sub">
+                                                            <strong style={{ color: '#e4e4e7', fontWeight: 500 }}>{artistNames}</strong>
+                                                            {t.album?.name ? ` • ${t.album.name}` : ''}
+                                                            {releaseYear ? ` (${releaseYear})` : ''}
+                                                            {plLabel && (
+                                                                <>
+                                                                    {' • '}
+                                                                    <span className="brand-text">{plLabel}</span>
+                                                                </>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
 
-                                            <div className="v2-track-right">
-                                                {typeof t.popularity === 'number' && (
-                                                    <span className="v2-track-pop" title="Popularity">
-                                                        🔥 {t.popularity}%
-                                                    </span>
-                                                )}
-                                                <span className="v2-track-dur">{formatDuration(t.duration_ms)}</span>
+                                                <div className="v2-track-right">
+                                                    {typeof t.popularity === 'number' && (
+                                                        <span className="v2-track-pop" title="Popularity">
+                                                            🔥 {t.popularity}%
+                                                        </span>
+                                                    )}
+                                                    <span className="v2-track-dur">{formatDuration(t.duration_ms)}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+
+                                    {filteredTracks.length > visibleLimit && (
+                                        <div className="obsidian-card" style={{ padding: '0.85rem 1.1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                            <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                                                Showing <strong style={{ color: '#fff' }}>{visibleLimit}</strong> of{' '}
+                                                <strong style={{ color: '#fff' }}>{filteredTracks.length.toLocaleString()}</strong> tracks
+                                                {' '}({selectedTrackItems.length.toLocaleString()} selected for action)
+                                            </span>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <button
+                                                    onClick={() => setVisibleLimit(prev => prev + 250)}
+                                                    className="v2-btn-secondary"
+                                                >
+                                                    Show +250 More
+                                                </button>
+                                                <button
+                                                    onClick={() => setVisibleLimit(filteredTracks.length)}
+                                                    className="v2-btn-primary brand-bg"
+                                                >
+                                                    Show All ({filteredTracks.length.toLocaleString()})
+                                                </button>
                                             </div>
                                         </div>
-                                    );
-                                })
+                                    )}
+                                </>
                             )}
                         </div>
                     </main>

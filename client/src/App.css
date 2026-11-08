@@ -498,6 +498,10 @@
   font-weight: 700;
 }
 
+.v2-playlist-search-wrap {
+  flex-shrink: 0;
+}
+
 .v2-playlist-list {
   display: flex;
   flex-direction: column;
@@ -518,6 +522,9 @@
   color: #a1a1aa;
   text-align: left;
   width: 100%;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
   transition: all 0.14s ease;
 }
 
