@@ -903,7 +903,7 @@ function App() {
 
     const handleConfirmRemoveTracks = async () => {
         if (!provider.supportsWrite) {
-            showToast('Anghami SDK is read-only.');
+            showToast('This provider is read-only.');
             setActiveModal(null);
             return;
         }
@@ -911,7 +911,9 @@ function App() {
 
         setIsSubmittingModal(true);
         try {
-            // Group URIs by sourcePlaylist.id (Supports both regular playlists and LIKED_SONGS!)
+            const removedKeys = new Set(selectedTrackItems.map(i => i._selectionKey));
+
+            // Group selected items by sourcePlaylist.id (Supports both regular playlists and LIKED_SONGS!)
             const byPlaylist = {};
             selectedTrackItems.forEach(item => {
                 const pid = item.sourcePlaylist?.id;
@@ -922,28 +924,71 @@ function App() {
             });
 
             const playlistIds = Object.keys(byPlaylist);
+            const removedCountByPlaylist = {};
+
             for (const pid of playlistIds) {
-                await provider.removeTracksFromPlaylist(token, pid, byPlaylist[pid]);
+                const uniqueUrisToDelete = Array.from(new Set(byPlaylist[pid]));
+                const deletedUriSet = new Set(uniqueUrisToDelete);
+
+                // Check if this playlist has unselected (KEEP) copies of any URI being deleted.
+                // Because Spotify's DELETE /playlists/{id}/tracks removes ALL occurrences of a URI,
+                // we re-insert the exact number of unselected (KEEP) copies for that URI!
+                const playlistAllItems = tracksCacheRef.current[pid] ||
+                    rawScopeTracks.filter(i => i.sourcePlaylist?.id === pid);
+
+                const urisToRestore = [];
+                if (pid !== PLAYLIST_IDS.LIKED_SONGS) {
+                    playlistAllItems.forEach(item => {
+                        if (!removedKeys.has(item._selectionKey)) {
+                            const itemUri = DuplicateDetector.extractUriFromKey(item._selectionKey) || item.track?.uri;
+                            if (itemUri && deletedUriSet.has(itemUri)) {
+                                urisToRestore.push(itemUri);
+                            }
+                        }
+                    });
+                }
+
+                await provider.removeTracksFromPlaylist(token, pid, uniqueUrisToDelete);
+
+                if (urisToRestore.length > 0) {
+                    await provider.addTracksToPlaylist(token, pid, urisToRestore);
+                }
+
+                const removedInThisPlaylist = selectedTrackItems.filter(i => i.sourcePlaylist?.id === pid).length;
+                removedCountByPlaylist[pid] = removedInThisPlaylist;
+
                 if (tracksCacheRef.current[pid]) {
-                    const removedKeysForPl = new Set(
-                        selectedTrackItems
-                            .filter(i => i.sourcePlaylist?.id === pid)
-                            .map(i => i._selectionKey)
-                    );
                     tracksCacheRef.current[pid] = tracksCacheRef.current[pid].filter(
-                        item => !removedKeysForPl.has(item._selectionKey)
+                        item => !removedKeys.has(item._selectionKey)
                     );
                 }
             }
 
-            const removedKeys = new Set(selectedTrackItems.map(i => i._selectionKey));
+            // Update sidebar track counts for modified playlists and Liked Songs
+            if (removedCountByPlaylist[PLAYLIST_IDS.LIKED_SONGS]) {
+                setLikedSongsCount(prev => Math.max(0, prev - removedCountByPlaylist[PLAYLIST_IDS.LIKED_SONGS]));
+            }
+            setPlaylistsData(prev =>
+                prev.map(pl =>
+                    removedCountByPlaylist[pl.id]
+                        ? {
+                            ...pl,
+                            tracks: {
+                                ...pl.tracks,
+                                total: Math.max(0, (pl.tracks?.total || 0) - removedCountByPlaylist[pl.id])
+                            }
+                        }
+                        : pl
+                )
+            );
+
             setRawScopeTracks(prev => prev.filter(item => !removedKeys.has(item._selectionKey)));
             setSelectedKeys(new Set());
             setActiveModal(null);
             showToast(`Removed ${selectedTrackItems.length} tracks across ${playlistIds.length} playlist(s)!`);
         } catch (err) {
             logger.error('Failed to remove tracks', err);
-            showToast(`Error removing tracks: ${err.message || 'Check permissions'}`);
+            showToast(`Error removing tracks: ${err.message || 'Check playlist ownership permissions'}`);
         } finally {
             setIsSubmittingModal(false);
         }
@@ -1048,20 +1093,16 @@ function App() {
                         </div>
 
                         <h1 className="v2-hero-title">
-                            Spotify &amp; Anghami <span className="brand-text">Toolkit 2.0</span>
+                            Spotify <span className="brand-text">Toolkit 2.0</span>
                         </h1>
                         <p className="v2-hero-subtitle">
                             Extract Arabic songs across your entire library in <strong>1 click</strong>, clean duplicate tracks with smart presets, and export 19-field Excel reports.
                         </p>
 
-                        <div className="v2-login-btn-grid">
+                        <div style={{ maxWidth: '360px', margin: '1.5rem auto 0' }}>
                             <button className="v2-btn-spotify" onClick={handleSpotifyLogin}>
                                 <span>🎧</span>
                                 <span>Continue with Spotify</span>
-                            </button>
-                            <button className="v2-btn-anghami" onClick={handleAnghamiLogin}>
-                                <span>🎵</span>
-                                <span>Continue with Anghami</span>
                             </button>
                         </div>
 
@@ -1077,7 +1118,7 @@ function App() {
                                     value={loginQuickUrl}
                                     onChange={e => setLoginQuickUrl(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && handleLoginQuickUrlAnalyze()}
-                                    placeholder="Paste Spotify or Anghami playlist link..."
+                                    placeholder="Paste Spotify playlist link or ID..."
                                     className="v2-input"
                                 />
                                 <button
@@ -1218,7 +1259,7 @@ function App() {
                             {activeWorkflow === 'arabic-all' && 'Active: Extract Arabic (All Songs)'}
                             {activeWorkflow === 'arabic-playlist' && 'Active: Extract Arabic (Selected Playlist)'}
                             {activeWorkflow === 'duplicates' && 'Active: 1-Click Duplicate Cleaner'}
-                            {activeWorkflow === 'insights' && 'Active: Artists, Era & Vibe Insights'}
+                            {activeWorkflow === 'insights' && 'Active: Artists, Era & Library Stats'}
                         </span>
                     </div>
 
@@ -1266,7 +1307,7 @@ function App() {
                         >
                             <span className="v2-qa-icon">📊</span>
                             <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">Artists, Era &amp; Vibe</div>
+                                <div className="v2-qa-title">Artists, Era &amp; Stats</div>
                                 <div className="v2-qa-sub">Interactive charts</div>
                             </div>
                         </button>
@@ -1646,19 +1687,16 @@ function App() {
                             <div className="v2-insights-panel">
                                 <div className="v2-kpi-grid">
                                     <div className="obsidian-card v2-kpi-card">
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Vibe Profile</div>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Popularity Profile</div>
                                         <div className="brand-text" style={{ fontSize: '0.88rem', fontWeight: 800, marginTop: '0.25rem' }}>
-                                            {vibeStats ? getVibeDescription(vibeStats) : '🎉 Ready to Scan'}
+                                            {insightsData.generalStats.avgPopularity >= 60
+                                                ? '🔥 Mainstream Hits'
+                                                : insightsData.generalStats.avgPopularity >= 35
+                                                    ? '✨ Balanced Mix'
+                                                    : '💎 Deep Cuts & Gems'}
                                         </div>
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                            <span>Avg Pop: {insightsData.generalStats.avgPopularity}%</span>
-                                            <button
-                                                onClick={handleRunVibeAnalysis}
-                                                disabled={isAnalyzingVibe}
-                                                style={{ background: 'transparent', color: 'var(--brand)', fontSize: '0.68rem', fontWeight: 700, padding: 0 }}
-                                            >
-                                                {isAnalyzingVibe ? 'Scanning...' : '⚡ Scan Vibe'}
-                                            </button>
+                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                                            Avg Popularity: {insightsData.generalStats.avgPopularity}%
                                         </div>
                                     </div>
 
