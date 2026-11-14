@@ -19,7 +19,11 @@ import {
     calculateTopArtists,
     filterTracksByArtists,
     calculateTimelineStats,
-    calculatePlaylistStats
+    calculatePlaylistStats,
+    isTrackUnplayableOrLocal,
+    classifyGenreBucket,
+    computeSmartSplitBuckets,
+    comparePlaylistTracks
 } from '../src/services/analysis.utils.js';
 import * as spotifyService from '../src/services/spotify.service.js';
 import { ANALYSIS_MODULES, ANALYSIS_MODULE_MAP } from '../src/config/analysisRegistry.js';
@@ -367,6 +371,61 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', (
     const pStats = calculatePlaylistStats(tracks);
     assert.equal(pStats.totalTracks, 2);
     assert.equal(pStats.avgPopularity, 80);
+
+    // Test isTrackUnplayableOrLocal
+    assert.equal(isTrackUnplayableOrLocal(null), true);
+    assert.equal(isTrackUnplayableOrLocal({ track: { is_local: true, id: '1' } }), true);
+    assert.equal(isTrackUnplayableOrLocal({ track: { is_playable: false, id: '1' } }), true);
+    assert.equal(isTrackUnplayableOrLocal({ track: { available_markets: [], id: '1' } }), true);
+    assert.equal(isTrackUnplayableOrLocal({ track: { id: 'valid1', available_markets: ['EG'] } }), false);
+
+    // Test classifyGenreBucket & computeSmartSplitBuckets
+    const genreMap = new Map([
+        ['a_arab', ['egyptian pop']],
+        ['a_rap', ['hip hop', 'trap']],
+        ['a_edm', ['progressive house', 'edm']],
+        ['a_rock', ['indie rock']],
+        ['a_pop', ['dance pop']]
+    ]);
+    assert.equal(classifyGenreBucket({ _isArabic: true, track: { artists: [] } }, genreMap), 'arabic');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_arab' }] } }, genreMap), 'arabic');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_rap' }] } }, genreMap), 'hiphop');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_edm' }] } }, genreMap), 'electronic');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_rock' }] } }, genreMap), 'rock');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_pop' }] } }, genreMap), 'pop');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'unknown' }] } }, genreMap), 'chill');
+
+    const splitSample = [
+        { _isArabic: true, _releaseYear: 2023, track: { id: '1', name: 'A', artists: [{ id: 'a_arab', name: 'Amr' }] } },
+        { _isArabic: false, _releaseYear: 2015, track: { id: '2', name: 'B', artists: [{ id: 'a_rap', name: 'Drake' }] } },
+        { _isArabic: false, _releaseYear: 1995, track: { id: '3', name: 'C', artists: [{ id: 'a_rock', name: 'Oasis' }] } }
+    ];
+    const genreBuckets = computeSmartSplitBuckets(splitSample, 'genre', genreMap);
+    assert.equal(genreBuckets.length, 6);
+    assert.equal(genreBuckets.find(b => b.id === 'gen-arabic').count, 1);
+    assert.equal(genreBuckets.find(b => b.id === 'gen-hiphop').count, 1);
+
+    const decadeBuckets = computeSmartSplitBuckets(splitSample, 'decade', genreMap);
+    assert.ok(decadeBuckets.some(b => b.id === 'dec-2020' && b.count === 1));
+    assert.ok(decadeBuckets.some(b => b.id === 'dec-2010' && b.count === 1));
+
+    const langBuckets = computeSmartSplitBuckets(splitSample, 'language', genreMap);
+    assert.equal(langBuckets.length, 2);
+    assert.equal(langBuckets[0].count, 1);
+    assert.equal(langBuckets[1].count, 2);
+
+    // Test comparePlaylistTracks (diff, shared, union)
+    const listA = [
+        { track: { id: '1', name: 'Song One', artists: [{ name: 'Artist A' }] } },
+        { track: { id: '2', name: 'Song Two', artists: [{ name: 'Artist B' }] } }
+    ];
+    const listB = [
+        { track: { id: '2', name: 'Song Two', artists: [{ name: 'Artist B' }] } },
+        { track: { id: '3', name: 'Song Three', artists: [{ name: 'Artist C' }] } }
+    ];
+    assert.equal(comparePlaylistTracks(listA, listB, 'diff').length, 1);
+    assert.equal(comparePlaylistTracks(listA, listB, 'shared').length, 1);
+    assert.equal(comparePlaylistTracks(listA, listB, 'union').length, 3);
 });
 
 test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network Retry, & 401 Auto-Refresh)', async () => {
@@ -566,6 +625,86 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
         const created = await spotifyService.createPlaylist('tok', 'u1', 'New', 'Desc');
         assert.equal(created.id, 'new_pl');
         await spotifyService.addTracksToPlaylist('tok', 'new_pl', ['spotify:track:t1']);
+        await spotifyService.replacePlaylistTracks('tok', 'new_pl', ['spotify:track:t1', 'spotify:track:t2']);
+
+        // Test Top Tracks, Top Artists, and Recently Played endpoints
+        global.fetch = async (url) => {
+            if (url.includes('/me/top/tracks')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ items: [{ id: 'top1', name: 'Top Track 1' }], total: 1 })
+                };
+            }
+            if (url.includes('/me/top/artists')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ items: [{ id: 'art_top', name: 'Top Artist 1' }] })
+                };
+            }
+            if (url.includes('/me/player/recently-played')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        items: [{ track: { id: 'rec1', name: 'Recent 1' }, played_at: '2026-11-14T12:00:00Z' }]
+                    })
+                };
+            }
+            return { ok: true, status: 200, json: async () => ({ items: [], next: null }) };
+        };
+
+        const topTracks = await spotifyService.fetchTopTracks('tok', 'short_term', 10);
+        assert.equal(topTracks.items.length, 1);
+        assert.equal(topTracks.items[0].track.id, 'top1');
+
+        const topArtists = await spotifyService.fetchTopArtists('tok', 'short_term', 10);
+        assert.equal(topArtists.length, 1);
+        assert.equal(topArtists[0].id, 'art_top');
+
+        const recentTracks = await spotifyService.fetchRecentlyPlayed('tok', 10);
+        assert.equal(recentTracks.items.length, 1);
+        assert.equal(recentTracks.items[0].track.id, 'rec1');
+        assert.equal(recentTracks.items[0].added_at, '2026-11-14T12:00:00Z');
+
+        // Restore mock for buildGlobalTrackMap
+        global.fetch = async (url) => {
+            if (url.includes('/me/playlists')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        items: [
+                            { id: 'p_ok', name: 'P_OK', tracks: { total: 1 } },
+                            { id: 'p_err', name: 'P_ERR', tracks: { total: 1 } }
+                        ],
+                        next: null
+                    })
+                };
+            }
+            if (url.includes('/playlists/p_err/tracks')) {
+                return { ok: false, status: 500, statusText: 'Err' };
+            }
+            if (url.includes('/playlists/p_ok/tracks')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ items: [{ track: { id: 't1', uri: 'spotify:track:t1' } }], total: 1 })
+                };
+            }
+            if (url.includes('/me/tracks')) {
+                if (likedTracksShouldFail) {
+                    return { ok: false, status: 500, statusText: 'Liked Err' };
+                }
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ items: [{ track: { id: 't_liked', uri: 'spotify:track:t_liked' } }], total: 1 })
+                };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+        };
 
         const progressLog = [];
         const globalMap = await spotifyService.buildGlobalTrackMap('tok', 'u1', (done, total) => progressLog.push({ done, total }));

@@ -330,6 +330,83 @@ export const addTracksToPlaylist = async (token, playlistId, trackUris) => {
     return true;
 };
 
+/**
+ * Permanently replaces/reorders all tracks in a playlist with the given ordered URI list.
+ * Uses PUT for the first 100 URIs, then appends any remaining batches via POST.
+ */
+export const replacePlaylistTracks = async (token, playlistId, trackUris = []) => {
+    const validUris = (trackUris || []).filter(Boolean);
+    const firstBatch = validUris.slice(0, 100);
+
+    const putRes = await fetchWithRetry(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+        method: "PUT",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ uris: firstBatch })
+    });
+    if (!putRes.ok) throw { status: putRes.status, message: putRes.statusText };
+
+    if (validUris.length > 100) {
+        await addTracksToPlaylist(token, playlistId, validUris.slice(100));
+    }
+    return true;
+};
+
+/**
+ * Fetches the authenticated user's top tracks (short_term, medium_term, or long_term).
+ */
+export const fetchTopTracks = async (token, timeRange = 'short_term', limit = 50) => {
+    const res = await fetchWithRetry(
+        `https://api.spotify.com/v1/me/top/tracks?time_range=${encodeURIComponent(timeRange)}&limit=${limit}`,
+        { method: "GET", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw { status: res.status, message: res.statusText };
+    const data = await res.json();
+    const rawTracks = data.items || [];
+    return {
+        items: rawTracks.map(track => ({
+            track,
+            added_at: null
+        })),
+        total: data.total ?? rawTracks.length
+    };
+};
+
+/**
+ * Fetches the authenticated user's top artists (short_term, medium_term, or long_term).
+ */
+export const fetchTopArtists = async (token, timeRange = 'short_term', limit = 20) => {
+    const res = await fetchWithRetry(
+        `https://api.spotify.com/v1/me/top/artists?time_range=${encodeURIComponent(timeRange)}&limit=${limit}`,
+        { method: "GET", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw { status: res.status, message: res.statusText };
+    const data = await res.json();
+    return data.items || [];
+};
+
+/**
+ * Fetches the authenticated user's 50 most recently played tracks.
+ */
+export const fetchRecentlyPlayed = async (token, limit = 50) => {
+    const res = await fetchWithRetry(
+        `https://api.spotify.com/v1/me/player/recently-played?limit=${limit}`,
+        { method: "GET", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw { status: res.status, message: res.statusText };
+    const data = await res.json();
+    const rawItems = data.items || [];
+    return {
+        items: rawItems.map(entry => ({
+            track: entry.track,
+            added_at: entry.played_at || null
+        })),
+        total: rawItems.length
+    };
+};
+
 export const buildGlobalTrackMap = async (token, userId, onProgress) => {
     let allPlaylists = [];
     let nextUrl = `https://api.spotify.com/v1/me/playlists?limit=50`;

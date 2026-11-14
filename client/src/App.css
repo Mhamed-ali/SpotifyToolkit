@@ -415,8 +415,26 @@
 
 .v2-quick-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.6rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+@media (max-width: 1180px) {
+  .v2-quick-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.v2-new-badge {
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 0.08rem 0.38rem;
+  border-radius: 5px;
+  background: rgba(29, 185, 84, 0.2);
+  color: #4ade80;
+  border: 1px solid rgba(29, 185, 84, 0.35);
+  margin-left: 0.35rem;
+  vertical-align: middle;
 }
 
 .v2-qa-card {
@@ -1445,4 +1463,232 @@
   .v2-export-fields-grid {
     grid-template-columns: 1fr;
   }
+
+  .v2-splitter-buckets {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .v2-compare-grid,
+  .v2-top50-kpi-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .v2-mobile-bottom-nav {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
+
+/* =========================================================================
+   V3.0 NEW WORKFLOW PANELS (SMART SPLITTER, COMPARE & SYNC, TOP 50, PLAYER)
+   ========================================================================= */
+
+.v2-feature-panel {
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.v2-feature-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.v2-seg-group {
+  display: inline-flex;
+  background: #09090b;
+  padding: 0.22rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.v2-seg-btn {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.38rem 0.75rem;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: all 0.14s ease;
+}
+
+.v2-seg-btn:hover {
+  color: #fff;
+}
+
+.v2-seg-btn.active {
+  background: var(--brand);
+  color: #052e16;
+  font-weight: 800;
+}
+
+/* Smart Splitter Bucket Cards */
+.v2-splitter-buckets {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+@media (max-width: 1180px) {
+  .v2-splitter-buckets {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.v2-bucket-card {
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  background: #09090b;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: #f4f4f5;
+}
+
+.v2-bucket-card:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.v2-bucket-card.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.v2-bucket-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.v2-bucket-name {
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v2-bucket-pct {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #4ade80;
+  flex-shrink: 0;
+}
+
+.v2-bucket-count {
+  font-size: 0.92rem;
+  font-weight: 800;
+  margin-top: 0.3rem;
+}
+
+.v2-bucket-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  margin-top: 0.45rem;
+  overflow: hidden;
+}
+
+.v2-bucket-bar-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 9999px;
+}
+
+/* Compare & Sync Panel */
+.v2-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.v2-compare-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.76rem;
+  flex-wrap: wrap;
+}
+
+/* Top 50 & History KPI Grid */
+.v2-top50-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.v2-top50-card {
+  background: #09090b;
+  border: 1px solid var(--border-subtle);
+  border-radius: 11px;
+  padding: 0.75rem 0.9rem;
+}
+
+/* Dead / Unplayable Track Health Card */
+.v2-kpi-card-danger {
+  background: rgba(239, 68, 68, 0.08) !important;
+  border-color: rgba(239, 68, 68, 0.28) !important;
+}
+
+/* Inline Track Row ▶ Preview Button */
+.v2-preview-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(29, 185, 84, 0.14);
+  border: 1px solid rgba(29, 185, 84, 0.35);
+  color: #4ade80;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.v2-preview-btn:hover,
+.v2-preview-btn.playing {
+  background: var(--brand);
+  color: #052e16;
+  border-color: var(--brand);
+}
+
+/* Docked Bottom Spotify Mini-Player Bar */
+.v2-mini-player {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 55;
+  background: rgba(14, 14, 19, 0.96);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(29, 185, 84, 0.45);
+  padding: 0.45rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.75);
+}
+
+.v2-mini-player-embed {
+  flex: 1;
+  max-width: 720px;
+  height: 80px;
+  border: none;
+  border-radius: 12px;
 }

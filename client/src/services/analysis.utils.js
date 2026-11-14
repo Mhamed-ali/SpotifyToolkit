@@ -142,3 +142,192 @@ export const calculatePlaylistStats = (tracks = []) => {
         popBuckets
     };
 };
+
+/**
+ * Detects whether a track item is a local file, explicitly marked unplayable, or delisted.
+ */
+export const isTrackUnplayableOrLocal = (item) => {
+    const t = item?.track;
+    if (!t) return true;
+    if (t.is_local === true) return true;
+    if (t.is_playable === false) return true;
+    if (!t.id && !t.uri) return true;
+    if (Array.isArray(t.available_markets) && t.available_markets.length === 0 && t.is_playable !== true) {
+        return true;
+    }
+    return false;
+};
+
+/**
+ * Classifies a track into one of 6 Smart Splitter Genre Family buckets using real Spotify Artist Genres
+ * and Arabic detection metadata.
+ */
+export const classifyGenreBucket = (item, genreMap = new Map()) => {
+    if (item?._isArabic) return 'arabic';
+
+    const genres = [];
+    if (Array.isArray(item?.track?.artists)) {
+        item.track.artists.forEach(a => {
+            if (a?.id && genreMap && typeof genreMap.get === 'function') {
+                const g = genreMap.get(a.id);
+                if (Array.isArray(g)) genres.push(...g);
+            }
+            if (Array.isArray(a?.genres)) {
+                genres.push(...a.genres);
+            }
+        });
+    }
+
+    const joined = genres.join(' ').toLowerCase();
+    if (/arab|egypt|mahragan|shaabi|khaliji|levant|lebanese|syrian|iraqi|maghreb|moroccan|tunisian|algerian|sudanese|mena/i.test(joined)) {
+        return 'arabic';
+    }
+    if (/hip hop|hip-hop|rap|trap|drill|r&b|rnb|urban/i.test(joined)) {
+        return 'hiphop';
+    }
+    if (/edm|electro|house|techno|trance|dubstep|drum and bass|dnb|synthwave|club/i.test(joined)) {
+        return 'electronic';
+    }
+    if (/rock|metal|punk|indie|alternative|grunge|shoegaze|emo/i.test(joined)) {
+        return 'rock';
+    }
+    if (/pop|dance|disco|k-pop|latin/i.test(joined)) {
+        return 'pop';
+    }
+    return 'chill';
+};
+
+/**
+ * Computes Smart Splitter buckets for 'genre', 'decade', or 'language' dimensions.
+ */
+export const computeSmartSplitBuckets = (tracks = [], dimension = 'genre', genreMap = new Map()) => {
+    const total = Math.max(1, tracks.length);
+
+    if (dimension === 'language') {
+        const arabicTracks = tracks.filter(t => Boolean(t?._isArabic));
+        const intlTracks = tracks.filter(t => !t?._isArabic);
+        return [
+            {
+                id: 'lang-arabic',
+                name: '🌙 Arabic Tracks',
+                playlistTitle: 'Arabic Collection',
+                tracks: arabicTracks,
+                count: arabicTracks.length,
+                pct: Math.round((arabicTracks.length / total) * 100)
+            },
+            {
+                id: 'lang-intl',
+                name: '🌍 International (Non-Arabic)',
+                playlistTitle: 'International Collection',
+                tracks: intlTracks,
+                count: intlTracks.length,
+                pct: Math.round((intlTracks.length / total) * 100)
+            }
+        ];
+    }
+
+    if (dimension === 'decade') {
+        const groups = {
+            '2020s': { id: 'dec-2020', name: '🔥 2020s Hits', playlistTitle: '2020s Hits Mix', tracks: [] },
+            '2010s': { id: 'dec-2010', name: '🎧 2010s Throwbacks', playlistTitle: '2010s Throwbacks', tracks: [] },
+            '2000s': { id: 'dec-2000', name: '💿 2000s Classics', playlistTitle: '2000s Classics', tracks: [] },
+            '1990s': { id: 'dec-1990', name: '📼 1990s Golden Era', playlistTitle: '1990s Golden Era', tracks: [] },
+            'older': { id: 'dec-older', name: '📻 1980s & Older', playlistTitle: 'Retro Classics (80s & Older)', tracks: [] }
+        };
+
+        tracks.forEach(item => {
+            const year = item?._releaseYear || parseInt((item?.track?.album?.release_date || '').substring(0, 4), 10);
+            if (!year || Number.isNaN(year) || year >= 2020) {
+                groups['2020s'].tracks.push(item);
+            } else if (year >= 2010) {
+                groups['2010s'].tracks.push(item);
+            } else if (year >= 2000) {
+                groups['2000s'].tracks.push(item);
+            } else if (year >= 1990) {
+                groups['1990s'].tracks.push(item);
+            } else {
+                groups['older'].tracks.push(item);
+            }
+        });
+
+        return Object.values(groups)
+            .map(b => ({
+                ...b,
+                count: b.tracks.length,
+                pct: Math.round((b.tracks.length / total) * 100)
+            }))
+            .filter(b => b.count > 0 || b.id === 'dec-2020');
+    }
+
+    // Default: 'genre'
+    const genreGroups = {
+        arabic: { id: 'gen-arabic', name: '🌙 Arabic & MENA', playlistTitle: 'Arabic & MENA Mix', tracks: [] },
+        hiphop: { id: 'gen-hiphop', name: '🎤 Hip-Hop & R&B', playlistTitle: 'Hip-Hop & R&B Mix', tracks: [] },
+        pop: { id: 'gen-pop', name: '✨ Pop & Dance', playlistTitle: 'Pop & Dance Mix', tracks: [] },
+        rock: { id: 'gen-rock', name: '🎸 Rock & Indie', playlistTitle: 'Rock & Indie Mix', tracks: [] },
+        electronic: { id: 'gen-electronic', name: '🎹 Electronic & House', playlistTitle: 'Electronic & House Mix', tracks: [] },
+        chill: { id: 'gen-chill', name: '☕ Chill, Acoustic & Other', playlistTitle: 'Chill & Acoustic Mix', tracks: [] }
+    };
+
+    tracks.forEach(item => {
+        const key = classifyGenreBucket(item, genreMap);
+        (genreGroups[key] || genreGroups.chill).tracks.push(item);
+    });
+
+    return Object.values(genreGroups).map(b => ({
+        ...b,
+        count: b.tracks.length,
+        pct: Math.round((b.tracks.length / total) * 100)
+    }));
+};
+
+/**
+ * Normalized track comparison key (by Spotify ID/URI or normalized title + primary artist).
+ */
+const getTrackCompareIdentity = (item) => {
+    const t = item?.track;
+    if (!t) return '';
+    const title = (t.name || '').toLowerCase().trim();
+    const artist = (t.artists?.[0]?.name || '').toLowerCase().trim();
+    if (title && artist) return `${title}::${artist}`;
+    return t.id || t.uri || '';
+};
+
+/**
+ * Compares two playlist track arrays:
+ * - 'diff' (A - B): Tracks in A that are NOT in B
+ * - 'shared' (A ∩ B): Tracks in BOTH A and B
+ * - 'union' (A ∪ B): Combined deduplicated union of A and B
+ */
+export const comparePlaylistTracks = (tracksA = [], tracksB = [], operation = 'diff') => {
+    const keysB = new Set(tracksB.map(getTrackCompareIdentity).filter(Boolean));
+    const seen = new Set();
+
+    if (operation === 'diff') {
+        return tracksA.filter(item => {
+            const k = getTrackCompareIdentity(item);
+            if (!k || keysB.has(k) || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        });
+    }
+
+    if (operation === 'shared') {
+        return tracksA.filter(item => {
+            const k = getTrackCompareIdentity(item);
+            if (!k || !keysB.has(k) || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        });
+    }
+
+    // 'union' (A ∪ B)
+    const combined = [];
+    [...tracksA, ...tracksB].forEach(item => {
+        const k = getTrackCompareIdentity(item);
+        if (!k || seen.has(k)) return;
+        seen.add(k);
+        combined.push(item);
+    });
+    return combined;
+};

@@ -27,6 +27,10 @@ const spotifyProvider = {
     removeTracksFromPlaylist: spotifyService.removeTracksFromPlaylist,
     createPlaylist: spotifyService.createPlaylist,
     addTracksToPlaylist: spotifyService.addTracksToPlaylist,
+    replacePlaylistTracks: spotifyService.replacePlaylistTracks,
+    fetchTopTracks: spotifyService.fetchTopTracks,
+    fetchTopArtists: spotifyService.fetchTopArtists,
+    fetchRecentlyPlayed: spotifyService.fetchRecentlyPlayed,
     buildGlobalTrackMap: spotifyService.buildGlobalTrackMap,
 
     extractPlaylistIdFromInput(input) {

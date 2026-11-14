@@ -9,7 +9,10 @@ import { ExcelExporter, EXPORT_FIELDS } from './services/ExcelExporter';
 import {
     calculateTopArtists,
     calculateTimelineStats,
-    calculatePlaylistStats
+    calculatePlaylistStats,
+    computeSmartSplitBuckets,
+    comparePlaylistTracks,
+    isTrackUnplayableOrLocal
 } from './services/analysis.utils';
 import { formatDuration, extractReleaseYear } from './utils/formatters';
 import { createClientLogger } from './utils/logger';
@@ -54,8 +57,33 @@ function App() {
 
     const [activeArtistFilter, setActiveArtistFilter] = useState(null);
     const [activeDecadeFilter, setActiveDecadeFilter] = useState(null);
+    const [onlyDeadTracksFilter, setOnlyDeadTracksFilter] = useState(false);
     const [trackSearch, setTrackSearch] = useState('');
     const [sortBy, setSortBy] = useState('default');
+    const [isSavingSortOrder, setIsSavingSortOrder] = useState(false);
+
+    // Smart Splitter State ('splitter' workflow)
+    const [splitDimension, setSplitDimension] = useState('genre'); // 'genre' | 'decade' | 'language'
+    const [selectedBucketId, setSelectedBucketId] = useState('gen-arabic');
+
+    // Compare & Sync State ('compare' workflow)
+    const [comparePlaylistA, setComparePlaylistA] = useState(PLAYLIST_IDS.LIKED_SONGS);
+    const [comparePlaylistB, setComparePlaylistB] = useState('');
+    const [compareOp, setCompareOp] = useState('diff'); // 'diff' | 'shared' | 'union'
+    const [compareTracksState, setCompareTracksState] = useState({ tracksA: [], tracksB: [], loading: false });
+    const [isSyncingCompare, setIsSyncingCompare] = useState(false);
+
+    // Top 50 & History State ('top50' workflow)
+    const [topRange, setTopRange] = useState('short_term'); // 'short_term' | 'medium_term' | 'long_term' | 'recent'
+    const [topTracksState, setTopTracksState] = useState({
+        items: [],
+        topArtists: [],
+        loading: false,
+        needsReauth: false
+    });
+
+    // Inline Docked Spotify Mini-Player State
+    const [previewTrack, setPreviewTrack] = useState(null); // { id, name, artist } | null
 
     // Insights State
     const [includeCollabs, setIncludeCollabs] = useState(false);
@@ -518,6 +546,9 @@ function App() {
                 setLikedSongsCount(likedTotal);
                 setSelectedPlaylistIds(initialScope);
                 setActiveWorkflow(initialWorkflow);
+                if (loadedPlaylists.length > 0) {
+                    setComparePlaylistB(loadedPlaylists[0].id);
+                }
             } catch (err) {
                 logger.error('Failed to initialize library', err);
             } finally {
@@ -535,14 +566,112 @@ function App() {
         loadScopeTracks(selectedPlaylistIds, playlistsData, likedSongsCount, token, provider);
     }, [token, isLoadingLibrary, selectedPlaylistIds, playlistsData, likedSongsCount, provider, loadScopeTracks]);
 
+    // Load Playlist A & Playlist B when in Compare & Sync workflow
+    useEffect(() => {
+        if (!token || activeWorkflow !== 'compare') return;
+        let cancelled = false;
+
+        const resolvePlaylistObj = (pid) => {
+            if (pid === PLAYLIST_IDS.LIKED_SONGS) {
+                return PlaylistModel.createLikedSongs(likedSongsCount || 0);
+            }
+            return playlistsData.find(p => p.id === pid) || null;
+        };
+
+        const loadComparePlaylists = async () => {
+            const plA = resolvePlaylistObj(comparePlaylistA);
+            const plB = resolvePlaylistObj(comparePlaylistB);
+            if (!plA || !plB) return;
+
+            setCompareTracksState(prev => ({ ...prev, loading: true }));
+            try {
+                const [tracksA, tracksB] = await Promise.all([
+                    fetchTracksForPlaylistCached(token, plA, provider),
+                    fetchTracksForPlaylistCached(token, plB, provider)
+                ]);
+                if (!cancelled) {
+                    setCompareTracksState({ tracksA: tracksA || [], tracksB: tracksB || [], loading: false });
+                }
+            } catch (err) {
+                logger.warn('Failed to load playlists for comparison', err);
+                if (!cancelled) {
+                    setCompareTracksState(prev => ({ ...prev, loading: false }));
+                }
+            }
+        };
+
+        loadComparePlaylists();
+        return () => { cancelled = true; };
+    }, [token, activeWorkflow, comparePlaylistA, comparePlaylistB, playlistsData, likedSongsCount, provider, fetchTracksForPlaylistCached]);
+
+    // Load Top 50 Tracks / Artists or Recently Played when in Top 50 & History workflow
+    useEffect(() => {
+        if (!token || activeWorkflow !== 'top50') return;
+        let cancelled = false;
+
+        const loadTopData = async () => {
+            setTopTracksState(prev => ({ ...prev, loading: true, needsReauth: false }));
+            try {
+                const rangeLabel = topRange === 'short_term'
+                    ? 'Top 50 (4 Weeks)'
+                    : topRange === 'medium_term'
+                        ? 'Top 50 (6 Months)'
+                        : topRange === 'long_term'
+                            ? 'All-Time Top 50'
+                            : 'Recently Played';
+
+                if (topRange === 'recent') {
+                    const res = await provider.fetchRecentlyPlayed(token, 50);
+                    if (cancelled) return;
+                    const enriched = (res.items || [])
+                        .map((item, idx) => enrichTrackItem(item, { id: 'RECENT', name: rangeLabel }, idx))
+                        .filter(Boolean);
+                    setTopTracksState({
+                        items: enriched,
+                        topArtists: calculateTopArtists(enriched, false).slice(0, 5),
+                        loading: false,
+                        needsReauth: false
+                    });
+                } else {
+                    const [tracksRes, artistsRes] = await Promise.all([
+                        provider.fetchTopTracks(token, topRange, 50),
+                        provider.fetchTopArtists(token, topRange, 10).catch(() => [])
+                    ]);
+                    if (cancelled) return;
+                    const enriched = (tracksRes.items || [])
+                        .map((item, idx) => enrichTrackItem(item, { id: `TOP_${topRange}`, name: rangeLabel }, idx))
+                        .filter(Boolean);
+                    setTopTracksState({
+                        items: enriched,
+                        topArtists: artistsRes || [],
+                        loading: false,
+                        needsReauth: false
+                    });
+                }
+            } catch (err) {
+                if (cancelled) return;
+                const isForbidden = err?.status === 403 || err?.status === 401;
+                setTopTracksState({
+                    items: [],
+                    topArtists: [],
+                    loading: false,
+                    needsReauth: isForbidden
+                });
+            }
+        };
+
+        loadTopData();
+        return () => { cancelled = true; };
+    }, [token, activeWorkflow, topRange, provider, enrichTrackItem]);
+
     // =========================================================================
     // EVALUATE ARABIC DETECTION (PASS 1 REGEX + PASS 3 GENRES) & DUPLICATE CLUSTERS
     // =========================================================================
-    const evaluatedRawTracks = useMemo(() => {
+    const evaluateArabicOnList = useCallback((list) => {
         const strictMode = Boolean(advancedOptions.strictArabicExtraction);
         const evalCache = arabicEvalCacheRef.current;
 
-        return rawScopeTracks.map(item => {
+        return list.map(item => {
             const tid = item?.track?.id || item?.track?.uri || '';
             const cacheKey = tid ? `${tid}::${strictMode ? 1 : 0}::${genreCacheVersion}` : null;
 
@@ -569,8 +698,12 @@ function App() {
                 _isArabic: Boolean(arabicReason)
             };
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rawScopeTracks, advancedOptions.strictArabicExtraction, genreCacheVersion]);
+    }, [advancedOptions.strictArabicExtraction, genreCacheVersion]);
+
+    const evaluatedRawTracks = useMemo(
+        () => evaluateArabicOnList(rawScopeTracks),
+        [rawScopeTracks, evaluateArabicOnList]
+    );
 
     // Update global Arabic match badge when viewing 'ALL'
     useEffect(() => {
@@ -660,6 +793,35 @@ function App() {
         };
     }, [evaluatedRawTracks, selectedPlaylistIds, advancedOptions, activeWorkflow]);
 
+    // Smart Splitter Buckets (Genre Family, Decade, Language)
+    const splitBuckets = useMemo(
+        () => computeSmartSplitBuckets(scopeTracks, splitDimension, genreCacheRef.current),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [scopeTracks, splitDimension, genreCacheVersion]
+    );
+
+    const activeSplitBucket = useMemo(
+        () => splitBuckets.find(b => b.id === selectedBucketId) || splitBuckets[0] || null,
+        [splitBuckets, selectedBucketId]
+    );
+
+    // Compare & Sync Result Tracks
+    const compareResultTracks = useMemo(() => {
+        if (activeWorkflow !== 'compare') return [];
+        const rawCompared = comparePlaylistTracks(
+            compareTracksState.tracksA,
+            compareTracksState.tracksB,
+            compareOp
+        );
+        return evaluateArabicOnList(rawCompared);
+    }, [activeWorkflow, compareTracksState.tracksA, compareTracksState.tracksB, compareOp, evaluateArabicOnList]);
+
+    // Top 50 & History Evaluated Tracks
+    const evaluatedTopTracks = useMemo(() => {
+        if (activeWorkflow !== 'top50') return [];
+        return evaluateArabicOnList(topTracksState.items);
+    }, [activeWorkflow, topTracksState.items, evaluateArabicOnList]);
+
     // =========================================================================
     // FILTERED & SORTED TRACKS (Driven Directly by Active Workflow + Search)
     // =========================================================================
@@ -668,12 +830,24 @@ function App() {
     const filteredTracks = useMemo(() => {
         const q = trackSearch.trim().toLowerCase();
 
-        const list = scopeTracks.filter(item => {
+        let baseCandidates = scopeTracks;
+        if (activeWorkflow === 'splitter') {
+            baseCandidates = activeSplitBucket ? activeSplitBucket.tracks : [];
+        } else if (activeWorkflow === 'compare') {
+            baseCandidates = compareResultTracks;
+        } else if (activeWorkflow === 'top50') {
+            baseCandidates = evaluatedTopTracks;
+        }
+
+        const list = baseCandidates.filter(item => {
             const t = item.track;
             if (!t) return false;
 
             // In Arabic workflows, show only Arabic matches
             if (isArabicWorkflow && !item._isArabic) return false;
+
+            // In Insights workflow when "Unplayable / Local" filter is active
+            if (onlyDeadTracksFilter && !isTrackUnplayableOrLocal(item)) return false;
 
             if (activeArtistFilter) {
                 const matchesArtist = includeCollabs
@@ -714,7 +888,12 @@ function App() {
         return list;
     }, [
         scopeTracks,
+        activeWorkflow,
+        activeSplitBucket,
+        compareResultTracks,
+        evaluatedTopTracks,
         isArabicWorkflow,
+        onlyDeadTracksFilter,
         activeArtistFilter,
         activeDecadeFilter,
         includeCollabs,
@@ -747,13 +926,15 @@ function App() {
         const generalStats = calculatePlaylistStats(baseList);
         const arabicCount = baseList.filter(i => i._isArabic).length;
         const arabicPct = baseList.length > 0 ? Math.round((arabicCount / baseList.length) * 100) : 0;
+        const deadTracksCount = baseList.filter(isTrackUnplayableOrLocal).length;
 
         return {
             topArtists,
             timeline,
             generalStats,
             arabicCount,
-            arabicPct
+            arabicPct,
+            deadTracksCount
         };
     }, [scopeTracks, includeCollabs]);
 
@@ -764,6 +945,7 @@ function App() {
         setActiveWorkflow(workflow);
         setActiveArtistFilter(null);
         setActiveDecadeFilter(null);
+        setOnlyDeadTracksFilter(false);
         setVisibleLimit(120);
 
         if (workflow === 'arabic-all') {
@@ -772,13 +954,96 @@ function App() {
             }
             setNewPlaylistName('🌙 Extracted Arabic Favorites');
         } else if (workflow === 'arabic-playlist') {
-            if (selectedPlaylistIds.has('ALL')) {
-                const firstSpecificId = likedSongsCount > 0
-                    ? PLAYLIST_IDS.LIKED_SONGS
-                    : (playlistsData[0]?.id || 'ALL');
-                setSelectedPlaylistIds(new Set([firstSpecificId]));
+            setNewPlaylistName('🌙 Extracted Arabic Playlist');
+        } else if (workflow === 'splitter') {
+            setNewPlaylistName(activeSplitBucket?.playlistTitle || '🧩 Smart Split Playlist');
+        } else if (workflow === 'compare') {
+            setNewPlaylistName('🔀 Synced & Merged Playlist');
+        } else if (workflow === 'top50') {
+            setNewPlaylistName('🏆 My Spotify Top 50');
+        }
+    };
+
+    const handleSelectSplitDimension = (dim) => {
+        setSplitDimension(dim);
+        setVisibleLimit(120);
+        const firstId = dim === 'genre' ? 'gen-arabic' : dim === 'decade' ? 'dec-2020' : 'lang-arabic';
+        setSelectedBucketId(firstId);
+    };
+
+    const handleSelectSplitBucket = (bucket) => {
+        setSelectedBucketId(bucket.id);
+        setNewPlaylistName(bucket.playlistTitle || bucket.name);
+        setVisibleLimit(120);
+    };
+
+    // 1-Click Sync Missing Tracks (A - B) directly into Target Playlist B
+    const handleSyncMissingToPlaylistB = async () => {
+        if (!comparePlaylistB || comparePlaylistB === PLAYLIST_IDS.LIKED_SONGS) {
+            showToast('Select a user-created Target Playlist B to sync tracks into!');
+            return;
+        }
+        const uris = Array.from(new Set(compareResultTracks.map(i => i.track?.uri).filter(Boolean)));
+        if (uris.length === 0) return;
+
+        setIsSyncingCompare(true);
+        try {
+            await provider.addTracksToPlaylist(token, comparePlaylistB, uris);
+            const targetPl = playlistsData.find(p => p.id === comparePlaylistB);
+            const targetName = targetPl?.name || 'Playlist B';
+
+            // Update cache & sidebar count for Playlist B
+            delete tracksCacheRef.current[comparePlaylistB];
+            setPlaylistsData(prev =>
+                prev.map(pl =>
+                    pl.id === comparePlaylistB
+                        ? { ...pl, tracks: { ...pl.tracks, total: (pl.tracks?.total || 0) + uris.length } }
+                        : pl
+                )
+            );
+            // Reload Playlist B so A - B updates to 0 missing
+            if (targetPl) {
+                const updatedB = await fetchTracksForPlaylistCached(token, targetPl, provider);
+                setCompareTracksState(prev => ({ ...prev, tracksB: updatedB || [] }));
             }
-            setNewPlaylistName('🎯 Extracted Arabic Playlist');
+            showToast(`Synced ${uris.length} missing tracks into "${targetName}"!`);
+        } catch (err) {
+            logger.error('Failed to sync tracks to Playlist B', err);
+            showToast(`Sync failed: ${err.message || 'Check playlist write permissions'}`);
+        } finally {
+            setIsSyncingCompare(false);
+        }
+    };
+
+    // Permanently Save Current Sort Order to the Selected Spotify Playlist
+    const singleEditablePlaylistId = useMemo(() => {
+        if (selectedPlaylistIds.size !== 1) return null;
+        const onlyId = Array.from(selectedPlaylistIds)[0];
+        if (!onlyId || onlyId === 'ALL' || onlyId === PLAYLIST_IDS.LIKED_SONGS) return null;
+        return onlyId;
+    }, [selectedPlaylistIds]);
+
+    const handleApplySortToSpotify = async () => {
+        if (!singleEditablePlaylistId || sortBy === 'default') return;
+        const uris = filteredTracks.map(i => i.track?.uri).filter(Boolean);
+        if (uris.length === 0) return;
+
+        setIsSavingSortOrder(true);
+        try {
+            await provider.replacePlaylistTracks(token, singleEditablePlaylistId, uris);
+            const plName = playlistsData.find(p => p.id === singleEditablePlaylistId)?.name || 'Playlist';
+            const reorderedItems = filteredTracks.map((item, idx) =>
+                enrichTrackItem(item, item.sourcePlaylist, idx)
+            );
+            tracksCacheRef.current[singleEditablePlaylistId] = reorderedItems;
+            setRawScopeTracks(reorderedItems);
+            setSortBy('default');
+            showToast(`Permanently saved new track order to "${plName}" on Spotify!`);
+        } catch (err) {
+            logger.error('Failed to reorder playlist on Spotify', err);
+            showToast(`Could not save sort order: ${err.message || 'Check playlist ownership'}`);
+        } finally {
+            setIsSavingSortOrder(false);
         }
     };
 
@@ -1275,42 +1540,31 @@ function App() {
                     </div>
                 </header>
 
-                {/* 2. 1-CLICK QUICK ACTIONS DOCK (Laptop Top Bar) */}
+                {/* 2. 1-CLICK QUICK ACTIONS DOCK (6-Card Workflow Bar) */}
                 <section className="v2-quick-dock">
                     <div className="v2-quick-dock-header">
-                        <span className="v2-section-label">⚡ 1-Click Workflows</span>
+                        <span className="v2-section-label">⚡ 1-Click Spotify Workflows</span>
                         <span className="brand-text" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
-                            {activeWorkflow === 'arabic-all' && 'Active: Extract Arabic (All Songs)'}
-                            {activeWorkflow === 'arabic-playlist' && 'Active: Extract Arabic (Selected Playlist)'}
-                            {activeWorkflow === 'duplicates' && 'Active: 1-Click Duplicate Cleaner'}
-                            {activeWorkflow === 'insights' && 'Active: Artists, Era & Library Stats'}
+                            {isArabicWorkflow && 'Active: 🌙 Arabic Extractor'}
+                            {activeWorkflow === 'duplicates' && 'Active: 🧹 1-Click Duplicate Cleaner'}
+                            {activeWorkflow === 'splitter' && 'Active: 🧩 Smart Playlist Splitter'}
+                            {activeWorkflow === 'compare' && 'Active: 🔀 Compare & Sync Playlists'}
+                            {activeWorkflow === 'top50' && 'Active: 🏆 Top 50 & Listening History'}
+                            {activeWorkflow === 'insights' && 'Active: 📊 Insights & Dead Track Cleaner'}
                         </span>
                     </div>
 
                     <div className="v2-quick-grid">
                         <button
-                            onClick={() => activateWorkflow('arabic-all')}
-                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'arabic-all' ? 'brand-active-card' : ''}`}
+                            onClick={() => activateWorkflow('arabic-playlist')}
+                            className={`obsidian-card-interactive v2-qa-card ${isArabicWorkflow ? 'brand-active-card' : ''}`}
                         >
                             <span className="v2-qa-icon">🌙</span>
                             <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">Arabic (All Songs)</div>
+                                <div className="v2-qa-title">Arabic Extractor</div>
                                 <div className="v2-qa-sub">
-                                    {allLibraryArabicCount !== null
-                                        ? `${allLibraryArabicCount} Arabic matches`
-                                        : 'Scan entire library'}
+                                    {scopeArabicCount} Arabic matches
                                 </div>
-                            </div>
-                        </button>
-
-                        <button
-                            onClick={() => activateWorkflow('arabic-playlist')}
-                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'arabic-playlist' ? 'brand-active-card' : ''}`}
-                        >
-                            <span className="v2-qa-icon">🎯</span>
-                            <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">Arabic (Playlist)</div>
-                                <div className="v2-qa-sub">{scopeArabicCount} in selected scope</div>
                             </div>
                         </button>
 
@@ -1326,13 +1580,55 @@ function App() {
                         </button>
 
                         <button
+                            onClick={() => activateWorkflow('splitter')}
+                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'splitter' ? 'brand-active-card' : ''}`}
+                        >
+                            <span className="v2-qa-icon">🧩</span>
+                            <div style={{ minWidth: 0 }}>
+                                <div className="v2-qa-title">
+                                    Smart Splitter
+                                    <span className="v2-new-badge">NEW</span>
+                                </div>
+                                <div className="v2-qa-sub">By Genre, Era &amp; Lang</div>
+                            </div>
+                        </button>
+
+                        <button
+                            onClick={() => activateWorkflow('compare')}
+                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'compare' ? 'brand-active-card' : ''}`}
+                        >
+                            <span className="v2-qa-icon">🔀</span>
+                            <div style={{ minWidth: 0 }}>
+                                <div className="v2-qa-title">
+                                    Compare &amp; Sync
+                                    <span className="v2-new-badge">NEW</span>
+                                </div>
+                                <div className="v2-qa-sub">Diff A−B, Shared &amp; Merge</div>
+                            </div>
+                        </button>
+
+                        <button
+                            onClick={() => activateWorkflow('top50')}
+                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'top50' ? 'brand-active-card' : ''}`}
+                        >
+                            <span className="v2-qa-icon">🏆</span>
+                            <div style={{ minWidth: 0 }}>
+                                <div className="v2-qa-title">
+                                    Top 50 &amp; History
+                                    <span className="v2-new-badge">NEW</span>
+                                </div>
+                                <div className="v2-qa-sub">Live Wrapped &amp; Recent</div>
+                            </div>
+                        </button>
+
+                        <button
                             onClick={() => activateWorkflow('insights')}
                             className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'insights' ? 'brand-active-card' : ''}`}
                         >
                             <span className="v2-qa-icon">📊</span>
                             <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">Artists, Era &amp; Stats</div>
-                                <div className="v2-qa-sub">Interactive charts</div>
+                                <div className="v2-qa-title">Insights &amp; Health</div>
+                                <div className="v2-qa-sub">Charts + Dead Tracks</div>
                             </div>
                         </button>
                     </div>
@@ -1341,11 +1637,11 @@ function App() {
                 {/* 3. MAIN WORKSPACE: Left Playlist Rail + Right Content Area */}
                 <div className="v2-workspace-body">
 
-                    {/* LEFT PLAYLIST RAIL (Hidden in "Arabic (All Songs)" mode; Compact 1-line pills on Phone) */}
-                    {activeWorkflow !== 'arabic-all' && (
+                    {/* LEFT PLAYLIST RAIL (Visible across all scope-based workflows) */}
+                    {activeWorkflow !== 'compare' && activeWorkflow !== 'top50' && (
                         <aside className="v2-playlist-sidebar">
                             <div className="v2-sidebar-top">
-                                <span className="v2-section-label">Select Playlist</span>
+                                <span className="v2-section-label">Select Scope</span>
                                 <button
                                     onClick={() => setIsMultiSelectMode(prev => !prev)}
                                     className={`v2-multi-btn ${isMultiSelectMode ? 'active' : ''}`}
@@ -1462,18 +1758,30 @@ function App() {
                                     <h2 className="v2-view-title">
                                         {isArabicWorkflow && `🌙 Arabic Tracks — ${scopeDisplayName}`}
                                         {activeWorkflow === 'duplicates' && `🧹 Duplicate Tracks — ${scopeDisplayName}`}
-                                        {activeWorkflow === 'insights' && `📊 Insights & Breakdown — ${scopeDisplayName}`}
+                                        {activeWorkflow === 'splitter' && `🧩 Smart Playlist Splitter — ${scopeDisplayName}`}
+                                        {activeWorkflow === 'compare' && '🔀 Compare & Sync Playlists'}
+                                        {activeWorkflow === 'top50' && '🏆 Personal Top 50 & Recently Played'}
+                                        {activeWorkflow === 'insights' && `📊 Insights & Health — ${scopeDisplayName}`}
                                     </h2>
                                     <span className="v2-count-badge brand-bg">
                                         {filteredTracks.length} Songs
                                     </span>
                                 </div>
                                 <p className="v2-view-subtitle">
-                                    {activeWorkflow === 'duplicates'
-                                        ? `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`
-                                        : activeWorkflow === 'insights'
-                                            ? 'Interactive artist breakdown, release eras, popularity profile & track analytics'
-                                            : `${advancedOptions.strictArabicExtraction ? 'Strict Arabic Mode (Title & Known Artists Only)' : 'Standard 3-Pass Detection: Script, Franco-Arab, Known Artists & Spotify Genres'}`}
+                                    {activeWorkflow === 'duplicates' &&
+                                        `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`}
+                                    {activeWorkflow === 'splitter' &&
+                                        'Automatically group any playlist or Liked Songs by Spotify Artist Genres, Release Decade, or Language and save as a new playlist in 1 click.'}
+                                    {activeWorkflow === 'compare' &&
+                                        'Find missing tracks (A − B), shared tracks (A ∩ B), or merge & deduplicate multiple playlists (A ∪ B).'}
+                                    {activeWorkflow === 'top50' &&
+                                        'Your real-time Spotify Wrapped across Last 4 Weeks, Last 6 Months, All-Time, and Recently Played.'}
+                                    {activeWorkflow === 'insights' &&
+                                        'Interactive artist breakdown, release eras, popularity profile & unplayable/local track cleaner.'}
+                                    {isArabicWorkflow &&
+                                        (advancedOptions.strictArabicExtraction
+                                            ? 'Strict Arabic Mode (Title & Known Artists Only)'
+                                            : 'Standard 3-Pass Detection: Script, Franco-Arab, Known Artists & Spotify Genres')}
                                 </p>
                             </div>
 
@@ -1484,7 +1792,11 @@ function App() {
                                     className="v2-btn-primary brand-bg"
                                 >
                                     <span>➕</span>
-                                    <span>Save as Playlist ({selectedTrackItems.length})</span>
+                                    <span>
+                                        {activeWorkflow === 'splitter' && activeSplitBucket
+                                            ? `Save "${activeSplitBucket.name}" (${selectedTrackItems.length})`
+                                            : `Save as Playlist (${selectedTrackItems.length})`}
+                                    </span>
                                 </button>
 
                                 <button
@@ -1496,16 +1808,324 @@ function App() {
                                     <span>Export Excel</span>
                                 </button>
 
-                                <button
-                                    onClick={() => setActiveModal('remove')}
-                                    disabled={!provider.supportsWrite || selectedTrackItems.length === 0}
-                                    className="v2-btn-danger"
-                                >
-                                    <span>🗑️</span>
-                                    <span>Remove ({selectedTrackItems.length})</span>
-                                </button>
+                                {activeWorkflow !== 'top50' && activeWorkflow !== 'compare' && (
+                                    <button
+                                        onClick={() => setActiveModal('remove')}
+                                        disabled={!provider.supportsWrite || selectedTrackItems.length === 0}
+                                        className="v2-btn-danger"
+                                    >
+                                        <span>🗑️</span>
+                                        <span>Remove ({selectedTrackItems.length})</span>
+                                    </button>
+                                )}
                             </div>
                         </div>
+
+                        {/* =========================================================
+                            NEW WORKFLOW PANEL 1: SMART PLAYLIST SPLITTER
+                            ========================================================= */}
+                        {activeWorkflow === 'splitter' && (
+                            <div className="obsidian-card v2-feature-panel">
+                                <div className="v2-feature-top-row">
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#d4d4d8' }}>Split Dimension:</span>
+                                        <div className="v2-seg-group">
+                                            <button
+                                                type="button"
+                                                onClick={() => handleSelectSplitDimension('genre')}
+                                                className={`v2-seg-btn ${splitDimension === 'genre' ? 'active' : ''}`}
+                                            >
+                                                🎸 By Genre Family
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleSelectSplitDimension('decade')}
+                                                className={`v2-seg-btn ${splitDimension === 'decade' ? 'active' : ''}`}
+                                            >
+                                                📅 By Release Decade
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleSelectSplitDimension('language')}
+                                                className={`v2-seg-btn ${splitDimension === 'language' ? 'active' : ''}`}
+                                            >
+                                                🌍 Arabic vs. International
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                        Click any bucket below to filter tracks &amp; save as a dedicated Spotify playlist
+                                    </span>
+                                </div>
+
+                                <div className="v2-splitter-buckets">
+                                    {splitBuckets.map(bucket => {
+                                        const isActive = activeSplitBucket?.id === bucket.id;
+                                        return (
+                                            <button
+                                                type="button"
+                                                key={bucket.id}
+                                                onClick={() => handleSelectSplitBucket(bucket)}
+                                                className={`v2-bucket-card ${isActive ? 'active' : ''}`}
+                                            >
+                                                <div className="v2-bucket-top">
+                                                    <span className="v2-bucket-name">{bucket.name}</span>
+                                                    <span className="v2-bucket-pct">{bucket.pct}%</span>
+                                                </div>
+                                                <div className="v2-bucket-count">
+                                                    {bucket.count.toLocaleString()}{' '}
+                                                    <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-secondary)' }}>tracks</span>
+                                                </div>
+                                                <div className="v2-bucket-bar">
+                                                    <div className="v2-bucket-bar-fill" style={{ width: `${Math.max(4, bucket.pct)}%` }} />
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* =========================================================
+                            NEW WORKFLOW PANEL 2: COMPARE & SYNC PLAYLISTS
+                            ========================================================= */}
+                        {activeWorkflow === 'compare' && (
+                            <div className="obsidian-card v2-feature-panel">
+                                <div className="v2-compare-grid">
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                                            Source Playlist A
+                                        </label>
+                                        <select
+                                            value={comparePlaylistA}
+                                            onChange={e => setComparePlaylistA(e.target.value)}
+                                            className="v2-select"
+                                            style={{ width: '100%' }}
+                                        >
+                                            {likedSongsCount > 0 && (
+                                                <option value={PLAYLIST_IDS.LIKED_SONGS}>
+                                                    💜 Liked Songs ({likedSongsCount} tracks)
+                                                </option>
+                                            )}
+                                            {playlistsData.map(pl => (
+                                                <option key={pl.id} value={pl.id}>
+                                                    🎵 {pl.name} ({pl.tracks?.total || 0} tracks)
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                                            Comparison Operation
+                                        </label>
+                                        <div className="v2-seg-group">
+                                            <button
+                                                type="button"
+                                                onClick={() => setCompareOp('diff')}
+                                                className={`v2-seg-btn ${compareOp === 'diff' ? 'active' : ''}`}
+                                            >
+                                                A − B (Missing)
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setCompareOp('shared')}
+                                                className={`v2-seg-btn ${compareOp === 'shared' ? 'active' : ''}`}
+                                            >
+                                                A ∩ B (Shared)
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setCompareOp('union')}
+                                                className={`v2-seg-btn ${compareOp === 'union' ? 'active' : ''}`}
+                                            >
+                                                A ∪ B (Merge)
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                                            Target Playlist B
+                                        </label>
+                                        <select
+                                            value={comparePlaylistB}
+                                            onChange={e => setComparePlaylistB(e.target.value)}
+                                            className="v2-select"
+                                            style={{ width: '100%' }}
+                                        >
+                                            {playlistsData.map(pl => (
+                                                <option key={pl.id} value={pl.id}>
+                                                    🎵 {pl.name} ({pl.tracks?.total || 0} tracks)
+                                                </option>
+                                            ))}
+                                            {likedSongsCount > 0 && (
+                                                <option value={PLAYLIST_IDS.LIKED_SONGS}>
+                                                    💜 Liked Songs ({likedSongsCount} tracks)
+                                                </option>
+                                            )}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="v2-compare-footer">
+                                    <span style={{ color: '#d4d4d8' }}>
+                                        {compareTracksState.loading ? (
+                                            'Loading playlists A and B for comparison...'
+                                        ) : compareOp === 'diff' ? (
+                                            <>
+                                                Showing <strong>{compareResultTracks.length} tracks</strong> present in{' '}
+                                                <strong>Playlist A</strong> but missing from <strong>Playlist B</strong>.
+                                            </>
+                                        ) : compareOp === 'shared' ? (
+                                            <>
+                                                Showing <strong>{compareResultTracks.length} common tracks</strong> found in BOTH{' '}
+                                                <strong>Playlist A</strong> and <strong>Playlist B</strong>.
+                                            </>
+                                        ) : (
+                                            <>
+                                                Showing <strong>{compareResultTracks.length} merged &amp; deduplicated tracks</strong>{' '}
+                                                combining <strong>Playlist A + Playlist B</strong>.
+                                            </>
+                                        )}
+                                    </span>
+
+                                    {compareOp === 'diff' && comparePlaylistB !== PLAYLIST_IDS.LIKED_SONGS && compareResultTracks.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={handleSyncMissingToPlaylistB}
+                                            disabled={isSyncingCompare}
+                                            className="v2-btn-primary brand-pill"
+                                            style={{ fontWeight: 700 }}
+                                        >
+                                            ⚡ {isSyncingCompare ? 'Syncing...' : `Sync ${compareResultTracks.length} Missing Tracks to Playlist B`}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* =========================================================
+                            NEW WORKFLOW PANEL 3: TOP 50 & LISTENING HISTORY
+                            ========================================================= */}
+                        {activeWorkflow === 'top50' && (
+                            <div className="obsidian-card v2-feature-panel">
+                                <div className="v2-feature-top-row">
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#d4d4d8' }}>Time Range:</span>
+                                        <div className="v2-seg-group">
+                                            <button
+                                                type="button"
+                                                onClick={() => setTopRange('short_term')}
+                                                className={`v2-seg-btn ${topRange === 'short_term' ? 'active' : ''}`}
+                                            >
+                                                🔥 Last 4 Weeks
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setTopRange('medium_term')}
+                                                className={`v2-seg-btn ${topRange === 'medium_term' ? 'active' : ''}`}
+                                            >
+                                                📅 Last 6 Months
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setTopRange('long_term')}
+                                                className={`v2-seg-btn ${topRange === 'long_term' ? 'active' : ''}`}
+                                            >
+                                                👑 All-Time Top 50
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setTopRange('recent')}
+                                                className={`v2-seg-btn ${topRange === 'recent' ? 'active' : ''}`}
+                                            >
+                                                🕒 Recently Played (Last 50)
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                        Real-time Spotify <code className="brand-text">/v1/me/top/tracks</code> &amp; <code className="brand-text">/v1/me/player/recently-played</code>
+                                    </span>
+                                </div>
+
+                                {topTracksState.needsReauth ? (
+                                    <div className="v2-top50-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                                        <div>
+                                            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>
+                                                🔓 Approve Spotify Top 50 &amp; History Permission
+                                            </div>
+                                            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                                Your current login session was created before the <code className="brand-text">user-top-read</code> and <code className="brand-text">user-read-recently-played</code> scopes were enabled. Click to re-approve in 1 click!
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleLoginWorkflowLaunch('top50')}
+                                            className="v2-btn-primary brand-bg"
+                                        >
+                                            🔄 Re-authenticate with Spotify
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="v2-top50-kpi-grid">
+                                        <div className="v2-top50-card">
+                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                                {topRange === 'recent' ? 'Most Recent Stream' : '#1 Most Played Track'}
+                                            </div>
+                                            <div className="brand-text" style={{ fontSize: '0.85rem', fontWeight: 800, marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {evaluatedTopTracks[0]
+                                                    ? `${evaluatedTopTracks[0].track?.name} — ${evaluatedTopTracks[0].track?.artists?.[0]?.name || ''}`
+                                                    : topTracksState.loading ? 'Loading...' : '-'}
+                                            </div>
+                                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                                {evaluatedTopTracks.length} tracks loaded
+                                            </div>
+                                        </div>
+
+                                        <div className="v2-top50-card">
+                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Top Artists in Period</div>
+                                            <div style={{ fontSize: '0.85rem', fontWeight: 800, marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {topTracksState.topArtists.length > 0
+                                                    ? topTracksState.topArtists.slice(0, 3).map(a => a.name).join(' • ')
+                                                    : topTracksState.loading ? 'Loading...' : '-'}
+                                            </div>
+                                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                                Ranked by stream frequency
+                                            </div>
+                                        </div>
+
+                                        <div className="v2-top50-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.65rem' }}>
+                                            <div style={{ minWidth: 0 }}>
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>1-Click Archive</div>
+                                                <div style={{ fontSize: '0.8rem', fontWeight: 700, marginTop: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                    Save {topRange === 'short_term' ? '4-Week Top 50' : topRange === 'medium_term' ? '6-Month Top 50' : topRange === 'long_term' ? 'All-Time Top 50' : 'Recent 50'}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                disabled={evaluatedTopTracks.length === 0}
+                                                onClick={() => {
+                                                    setNewPlaylistName(
+                                                        topRange === 'short_term'
+                                                            ? `🔥 My Top 50 — Last 4 Weeks`
+                                                            : topRange === 'medium_term'
+                                                                ? `📅 My Top 50 — Last 6 Months`
+                                                                : topRange === 'long_term'
+                                                                    ? `👑 My All-Time Top 50`
+                                                                    : `🕒 Recently Played 50`
+                                                    );
+                                                    setActiveModal('save');
+                                                }}
+                                                className="v2-btn-primary brand-bg"
+                                            >
+                                                Save Playlist
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {/* COLLAPSIBLE ADVANCED OPTIONS CONFIGURATION PANEL (Context-Aware per Active Feature) */}
                         {(activeWorkflow === 'duplicates' || isArabicWorkflow) && (
@@ -1672,7 +2292,7 @@ function App() {
                             </div>
                         )}
 
-                        {/* Inline Search + Sort + Selection Summary Bar (No Redundant Filter Chips!) */}
+                        {/* Inline Search + Sort + Permanent Spotify Reorder + Selection Summary Bar */}
                         <div className="v2-toolbar">
                             <div className="v2-toolbar-top">
                                 <input
@@ -1701,6 +2321,15 @@ function App() {
                                     </button>
                                 )}
 
+                                {onlyDeadTracksFilter && (
+                                    <button
+                                        onClick={() => setOnlyDeadTracksFilter(false)}
+                                        className="v2-chip v2-chip-filter-active"
+                                    >
+                                        👻 Unplayable / Local Only ✕
+                                    </button>
+                                )}
+
                                 <select
                                     value={sortBy}
                                     onChange={e => setSortBy(e.target.value)}
@@ -1714,6 +2343,21 @@ function App() {
                                     <option value="pop-desc">Sort: Highest Popularity</option>
                                 </select>
 
+                                {/* NEW FEATURE: Permanently Save Sort Order to Spotify Playlist */}
+                                {singleEditablePlaylistId && sortBy !== 'default' && (
+                                    <button
+                                        type="button"
+                                        onClick={handleApplySortToSpotify}
+                                        disabled={isSavingSortOrder}
+                                        className="v2-btn-secondary brand-pill"
+                                        style={{ fontWeight: 700 }}
+                                        title="Permanently reorder this playlist inside your Spotify account"
+                                    >
+                                        <span>💾</span>
+                                        <span>{isSavingSortOrder ? 'Saving Order...' : 'Save Order to Spotify'}</span>
+                                    </button>
+                                )}
+
                                 <button onClick={handleSelectAllVisible} className="v2-btn-secondary">
                                     {filteredTracks.length > 0 && filteredTracks.every(t => selectedKeys.has(t._selectionKey))
                                         ? 'Deselect All'
@@ -1726,7 +2370,7 @@ function App() {
                             </div>
                         </div>
 
-                        {/* INTERACTIVE INSIGHTS DRAWER (Visible in Insights Workflow) */}
+                        {/* INTERACTIVE INSIGHTS & LIBRARY HEALTH DRAWER (Visible in Insights Workflow) */}
                         {activeWorkflow === 'insights' && (
                             <div className="v2-insights-panel">
                                 <div className="v2-kpi-grid">
@@ -1755,18 +2399,6 @@ function App() {
                                     </div>
 
                                     <div className="obsidian-card v2-kpi-card">
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Top Artist</div>
-                                        <div style={{ fontSize: '0.88rem', fontWeight: 800, marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                            {insightsData.topArtists[0]
-                                                ? `${insightsData.topArtists[0].name} (${insightsData.topArtists[0].count})`
-                                                : '-'}
-                                        </div>
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                                            Tap bars below to filter
-                                        </div>
-                                    </div>
-
-                                    <div className="obsidian-card v2-kpi-card">
                                         <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Library Duration</div>
                                         <div style={{ fontSize: '0.88rem', fontWeight: 800, marginTop: '0.25rem' }}>
                                             {insightsData.generalStats.durationStr}
@@ -1774,6 +2406,31 @@ function App() {
                                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                                             Explicit: {insightsData.generalStats.explicitPercent}%
                                         </div>
+                                    </div>
+
+                                    {/* NEW FEATURE: Unplayable / Local Track Cleaner Card */}
+                                    <div className={`obsidian-card v2-kpi-card ${insightsData.deadTracksCount > 0 ? 'v2-kpi-card-danger' : ''}`}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <span style={{ fontSize: '0.72rem', color: insightsData.deadTracksCount > 0 ? '#fca5a5' : 'var(--text-secondary)', fontWeight: 700 }}>
+                                                👻 Unplayable / Local
+                                            </span>
+                                            <span style={{ fontSize: '0.7rem', fontWeight: 800, color: insightsData.deadTracksCount > 0 ? '#f87171' : '#4ade80' }}>
+                                                {insightsData.deadTracksCount} found
+                                            </span>
+                                        </div>
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                            Delisted, region-locked &amp; local files
+                                        </div>
+                                        {insightsData.deadTracksCount > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setOnlyDeadTracksFilter(prev => !prev)}
+                                                className="v2-btn-secondary"
+                                                style={{ marginTop: '0.35rem', width: '100%', justifyContent: 'center', padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                                            >
+                                                {onlyDeadTracksFilter ? 'Show All Tracks' : `Filter & Clean (${insightsData.deadTracksCount})`}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
 
@@ -1856,7 +2513,7 @@ function App() {
 
                         {/* TRACK LIST CONTAINER */}
                         <div className="v2-tracks-list">
-                            {(isLoadingLibrary || scanProgress) && filteredTracks.length === 0 ? (
+                            {(isLoadingLibrary || scanProgress || compareTracksState.loading || topTracksState.loading) && filteredTracks.length === 0 ? (
                                 <div className="obsidian-card v2-analyzing-empty">
                                     <div className="v2-eq-bars v2-eq-bars-lg" aria-hidden="true">
                                         <span className="v2-eq-bar" />
@@ -1892,6 +2549,7 @@ function App() {
                                         const plLabel = activeWorkflow !== 'duplicates' && item.sourcePlaylists?.length > 1
                                             ? `${item.sourcePlaylists[0]} +${item.sourcePlaylists.length - 1}`
                                             : (item.sourcePlaylist?.name || '');
+                                        const isPlayingPreview = previewTrack?.id === t.id;
 
                                         return (
                                             <div
@@ -1906,6 +2564,23 @@ function App() {
                                                         onChange={() => {}}
                                                         style={{ width: 15, height: 15, accentColor: 'var(--brand)', flexShrink: 0, cursor: 'pointer' }}
                                                     />
+                                                    {t.id && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPreviewTrack(
+                                                                    isPlayingPreview
+                                                                        ? null
+                                                                        : { id: t.id, name: t.name, artist: artistNames }
+                                                                );
+                                                            }}
+                                                            title={isPlayingPreview ? 'Close Preview Player' : 'Preview Track in Spotify Mini-Player'}
+                                                            className={`v2-preview-btn ${isPlayingPreview ? 'playing' : ''}`}
+                                                        >
+                                                            {isPlayingPreview ? '♫' : '▶'}
+                                                        </button>
+                                                    )}
                                                     {thumbUrl ? (
                                                         <img src={thumbUrl} alt="" className="v2-track-thumb" loading="lazy" />
                                                     ) : (
@@ -1975,28 +2650,63 @@ function App() {
                     </main>
                 </div>
 
+                {/* DOCKED BOTTOM SPOTIFY MINI-PLAYER BAR */}
+                {previewTrack && (
+                    <div className="v2-mini-player">
+                        <iframe
+                            title={`Spotify Preview: ${previewTrack.name}`}
+                            src={`https://open.spotify.com/embed/track/${previewTrack.id}?utm_source=generator&theme=0`}
+                            className="v2-mini-player-embed"
+                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                            loading="lazy"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setPreviewTrack(null)}
+                            className="v2-btn-secondary"
+                            style={{ flexShrink: 0 }}
+                        >
+                            ✕ Close Player
+                        </button>
+                    </div>
+                )}
+
                 {/* MOBILE STICKY BOTTOM NAVIGATION (Shown on Phone < 768px) */}
                 <nav className="v2-mobile-bottom-nav">
                     <button
-                        onClick={() => activateWorkflow('arabic-all')}
-                        className={`v2-mnav-btn ${activeWorkflow === 'arabic-all' ? 'active' : ''}`}
+                        onClick={() => activateWorkflow('arabic-playlist')}
+                        className={`v2-mnav-btn ${isArabicWorkflow ? 'active' : ''}`}
                     >
                         <span style={{ fontSize: '1rem' }}>🌙</span>
-                        <span>Arabic All</span>
-                    </button>
-                    <button
-                        onClick={() => activateWorkflow('arabic-playlist')}
-                        className={`v2-mnav-btn ${activeWorkflow === 'arabic-playlist' ? 'active' : ''}`}
-                    >
-                        <span style={{ fontSize: '1rem' }}>🎯</span>
-                        <span>By Playlist</span>
+                        <span>Arabic</span>
                     </button>
                     <button
                         onClick={() => activateWorkflow('duplicates')}
                         className={`v2-mnav-btn ${activeWorkflow === 'duplicates' ? 'active' : ''}`}
                     >
                         <span style={{ fontSize: '1rem' }}>🧹</span>
-                        <span>Duplicates</span>
+                        <span>Dupes</span>
+                    </button>
+                    <button
+                        onClick={() => activateWorkflow('splitter')}
+                        className={`v2-mnav-btn ${activeWorkflow === 'splitter' ? 'active' : ''}`}
+                    >
+                        <span style={{ fontSize: '1rem' }}>🧩</span>
+                        <span>Splitter</span>
+                    </button>
+                    <button
+                        onClick={() => activateWorkflow('compare')}
+                        className={`v2-mnav-btn ${activeWorkflow === 'compare' ? 'active' : ''}`}
+                    >
+                        <span style={{ fontSize: '1rem' }}>🔀</span>
+                        <span>Compare</span>
+                    </button>
+                    <button
+                        onClick={() => activateWorkflow('top50')}
+                        className={`v2-mnav-btn ${activeWorkflow === 'top50' ? 'active' : ''}`}
+                    >
+                        <span style={{ fontSize: '1rem' }}>🏆</span>
+                        <span>Top 50</span>
                     </button>
                     <button
                         onClick={() => activateWorkflow('insights')}
