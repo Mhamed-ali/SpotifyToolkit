@@ -590,6 +590,78 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', a
     });
     assert.equal(stage3FallbackResolved.track.id, 'live_fuzzy');
 
+    // Test Arabic orthography + secondary co-artist fallback (e.g. "اغنية اقوى ميكس من وي" -> "أقوى ميكس" by Wegz)
+    const deadArabicSponsor = {
+        track: {
+            id: 'dead_we',
+            uri: 'spotify:track:dead_we',
+            name: 'اغنية اقوى ميكس من وي',
+            duration_ms: 190000,
+            is_playable: false,
+            artists: [{ name: 'Telecom Egypt' }, { name: 'Ahmed Mekky' }, { name: 'Wegz' }]
+        }
+    };
+    const playableWegzCandidate = {
+        id: 'live_wegz',
+        uri: 'spotify:track:live_wegz',
+        name: 'أقوى ميكس',
+        duration_ms: 198000,
+        popularity: 72,
+        available_markets: ['EG'],
+        artists: [{ name: 'Ahmed Mekky' }, { name: 'Wegz' }]
+    };
+    const resolvedArabicFallback = await resolveSpotifyTrackReplacement(deadArabicSponsor, async (query) => {
+        // Primary query includes "Telecom Egypt" and returns empty; secondary fallback query omits sponsor and succeeds
+        if (query.includes('Telecom')) return [];
+        return [playableWegzCandidate];
+    });
+    assert.ok(resolvedArabicFallback);
+    assert.equal(resolvedArabicFallback.track.id, 'live_wegz');
+    assert.equal(resolvedArabicFallback.tier, 1);
+    assert.match(resolvedArabicFallback.matchReason, /Same Artist & Title/);
+
+    // Test alternative/original artist fallback (Tier 0.5) when cover uploader is delisted
+    const deadCoverItem = {
+        track: {
+            id: 'dead_cover',
+            uri: 'spotify:track:dead_cover',
+            name: 'Just A Boy - Japanese Rap',
+            duration_ms: 205000,
+            is_playable: false,
+            artists: [{ name: 'elude' }]
+        }
+    };
+    const altArtistCandidate = {
+        id: 'live_diivane',
+        uri: 'spotify:track:live_diivane',
+        name: 'Just a Boy',
+        duration_ms: 195000,
+        popularity: 64,
+        available_markets: ['EG'],
+        artists: [{ name: 'DIIVANE' }]
+    };
+    const exactDurAltCandidate = {
+        id: 'live_exact_dur_alt',
+        uri: 'spotify:track:live_exact_dur_alt',
+        name: 'Just a Boy',
+        duration_ms: 204000,
+        popularity: 70,
+        available_markets: ['EG'],
+        artists: [{ name: 'Hozier' }]
+    };
+    const resolvedAlt = await resolveSpotifyTrackReplacement(deadCoverItem, async (query) => {
+        if (query.includes('elude')) return [];
+        return [altArtistCandidate];
+    });
+    assert.ok(resolvedAlt);
+    assert.equal(resolvedAlt.track.id, 'live_diivane');
+    assert.equal(resolvedAlt.tier, 0.5);
+    assert.match(resolvedAlt.matchReason, /Alternative Version \(DIIVANE\)/);
+
+    const exactDurAltMatch = findBestPlayableReplacement(deadCoverItem, [exactDurAltCandidate], 'Spotify Search');
+    assert.equal(exactDurAltMatch.tier, 0.5);
+    assert.match(exactDurAltMatch.matchReason, /Same Title & Duration \(Hozier\)/);
+
     const failedResolved = await resolveSpotifyTrackReplacement(deadItem, async () => {
         throw new Error('Search down');
     });

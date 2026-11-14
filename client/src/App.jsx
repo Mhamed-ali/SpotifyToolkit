@@ -67,7 +67,9 @@ function App() {
 
     // Dead / Locked Track 3-Stage Replacement Engine State
     const [deadReplacementsMap, setDeadReplacementsMap] = useState({});
+    const [searchedNoMatchIds, setSearchedNoMatchIds] = useState(() => new Set());
     const [isSearchingReplacements, setIsSearchingReplacements] = useState(false);
+    const [deadSearchProgress, setDeadSearchProgress] = useState(null); // { done, total } | null
     const [isReplacingDeadTracks, setIsReplacingDeadTracks] = useState(false);
 
     // Compare & Sync State ('compare' workflow)
@@ -994,7 +996,7 @@ function App() {
 
     // STAGE 2 & STAGE 3: Search Spotify by ISRC and by Title+Artist+Duration for any unresolved dead tracks
     const handleFindDeadTrackReplacements = async () => {
-        if (!token || !provider.searchTracks) return;
+        if (!token || !provider.searchTracks || isSearchingReplacements) return;
         const unresolvedDead = scopeTracks.filter(
             item =>
                 isTrackUnplayableOrLocal(item) &&
@@ -1014,23 +1016,47 @@ function App() {
         }
 
         setIsSearchingReplacements(true);
+        setDeadSearchProgress({ done: 0, total: unresolvedDead.length });
         let newlyFoundCount = 0;
-        const discovered = {};
 
         try {
             const searchFn = (query, limit) => provider.searchTracks(token, query, limit);
-            for (const deadItem of unresolvedDead) {
-                const tid = deadItem.track?.id;
-                if (!tid) continue;
-                const match = await resolveSpotifyTrackReplacement(deadItem, searchFn);
-                if (match) {
-                    discovered[tid] = match;
-                    newlyFoundCount++;
-                }
-            }
+            const BATCH_SIZE = 3;
 
-            if (newlyFoundCount > 0) {
-                setDeadReplacementsMap(prev => ({ ...prev, ...discovered }));
+            for (let i = 0; i < unresolvedDead.length; i += BATCH_SIZE) {
+                const batch = unresolvedDead.slice(i, i + BATCH_SIZE);
+                const batchDiscovered = {};
+                const batchNoMatch = [];
+
+                await Promise.all(
+                    batch.map(async (deadItem) => {
+                        const tid = deadItem.track?.id;
+                        if (!tid) return;
+                        const match = await resolveSpotifyTrackReplacement(deadItem, searchFn);
+                        if (match) {
+                            batchDiscovered[tid] = match;
+                            newlyFoundCount++;
+                        } else {
+                            batchNoMatch.push(tid);
+                        }
+                    })
+                );
+
+                if (Object.keys(batchDiscovered).length > 0) {
+                    setDeadReplacementsMap(prev => ({ ...prev, ...batchDiscovered }));
+                }
+                if (batchNoMatch.length > 0) {
+                    setSearchedNoMatchIds(prev => {
+                        const next = new Set(prev);
+                        batchNoMatch.forEach(id => next.add(id));
+                        return next;
+                    });
+                }
+
+                setDeadSearchProgress({
+                    done: Math.min(i + batch.length, unresolvedDead.length),
+                    total: unresolvedDead.length
+                });
             }
 
             const totalReady = insightsData.deadReplaceableCount + newlyFoundCount;
@@ -1041,6 +1067,7 @@ function App() {
             );
         } finally {
             setIsSearchingReplacements(false);
+            setDeadSearchProgress(null);
         }
     };
 
@@ -2511,12 +2538,14 @@ function App() {
                                             onClick={handleFindDeadTrackReplacements}
                                             disabled={isSearchingReplacements}
                                             className="v2-btn-secondary"
-                                            title="Search Spotify by ISRC and Title + Artist + Duration (±2s) for playable re-uploads"
+                                            title="Search Spotify by ISRC and Multi-Pass Title + Co-Artists + Duration for playable versions"
                                         >
                                             <span>🔍</span>
                                             <span>
                                                 {isSearchingReplacements
-                                                    ? 'Searching Spotify...'
+                                                    ? deadSearchProgress
+                                                        ? `Searching (${deadSearchProgress.done}/${deadSearchProgress.total})...`
+                                                        : 'Searching Spotify...'
                                                     : 'Find Replacements on Spotify'}
                                             </span>
                                         </button>
@@ -2629,9 +2658,11 @@ function App() {
                                             </span>
                                         </div>
                                         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                                            {insightsData.deadReplaceableCount > 0
-                                                ? `✅ ${insightsData.deadReplaceableCount} playable replacement(s) ready!`
-                                                : 'Delisted, region-locked & local files'}
+                                            {isSearchingReplacements && deadSearchProgress
+                                                ? `🔍 Scanning (${deadSearchProgress.done}/${deadSearchProgress.total}) • ${insightsData.deadReplaceableCount} matched`
+                                                : insightsData.deadReplaceableCount > 0
+                                                    ? `✅ ${insightsData.deadReplaceableCount} playable replacement(s) ready!`
+                                                    : 'Delisted, region-locked & local files'}
                                         </div>
                                         {insightsData.deadTracksCount > 0 && (
                                             <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
@@ -2649,7 +2680,22 @@ function App() {
                                                 >
                                                     {onlyDeadTracksFilter ? 'Show All' : `Filter & Find (${insightsData.deadTracksCount})`}
                                                 </button>
-                                                {insightsData.deadReplaceableCount > 0 ? (
+                                                {(isSearchingReplacements || insightsData.deadReplaceableCount < insightsData.deadTracksCount) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleFindDeadTrackReplacements}
+                                                        disabled={isSearchingReplacements}
+                                                        className="v2-btn-secondary"
+                                                        style={{ flex: 1, justifyContent: 'center', padding: '0.25rem 0.45rem', fontSize: '0.68rem' }}
+                                                    >
+                                                        {isSearchingReplacements
+                                                            ? deadSearchProgress
+                                                                ? `Searching (${deadSearchProgress.done}/${deadSearchProgress.total})...`
+                                                                : 'Searching...'
+                                                            : '🔍 Search Spotify'}
+                                                    </button>
+                                                )}
+                                                {insightsData.deadReplaceableCount > 0 && (
                                                     <button
                                                         type="button"
                                                         onClick={() => handleReplaceDeadTracks()}
@@ -2660,16 +2706,6 @@ function App() {
                                                         {isReplacingDeadTracks
                                                             ? 'Replacing...'
                                                             : `🔄 Replace (${insightsData.deadReplaceableCount})`}
-                                                    </button>
-                                                ) : (
-                                                    <button
-                                                        type="button"
-                                                        onClick={handleFindDeadTrackReplacements}
-                                                        disabled={isSearchingReplacements}
-                                                        className="v2-btn-secondary"
-                                                        style={{ flex: 1, justifyContent: 'center', padding: '0.25rem 0.45rem', fontSize: '0.68rem' }}
-                                                    >
-                                                        {isSearchingReplacements ? 'Searching...' : '🔍 Search Spotify'}
                                                     </button>
                                                 )}
                                             </div>
@@ -2896,6 +2932,24 @@ function App() {
                                                                 >
                                                                     🔄 {deadReplacement.matchReason} (🔥 {deadReplacement.track.popularity ?? 0}%)
                                                                 </span>
+                                                            )}
+                                                            {isDeadTrack && !t.is_local && !deadReplacement && (
+                                                                isSearchingReplacements && !searchedNoMatchIds.has(t.id) ? (
+                                                                    <span
+                                                                        className="v2-badge-reason"
+                                                                        style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.12)' }}
+                                                                    >
+                                                                        ⏳ Scanning Spotify...
+                                                                    </span>
+                                                                ) : searchedNoMatchIds.has(t.id) ? (
+                                                                    <span
+                                                                        className="v2-badge-reason"
+                                                                        style={{ background: 'rgba(239,68,68,0.08)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.22)' }}
+                                                                        title="Searched Spotify by ISRC, Title + Co-Artists, and Core Title — no playable version exists on Spotify"
+                                                                    >
+                                                                        ❌ No Match on Spotify
+                                                                    </span>
+                                                                ) : null
                                                             )}
                                                             {item._arabicReason && (
                                                                 <span className="v2-badge-reason brand-pill">{item._arabicReason}</span>

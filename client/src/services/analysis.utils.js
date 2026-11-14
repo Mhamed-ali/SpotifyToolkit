@@ -159,18 +159,42 @@ export const isTrackUnplayableOrLocal = (item) => {
 };
 
 const normalizeReplacementText = (str = '') =>
-    String(str).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-
-const normalizeReplacementTitle = (str = '') =>
     String(str)
         .toLowerCase()
-        .replace(/\s*\((?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^)]*\)/gi, '')
-        .replace(/\s*\[(?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^\]]*\]/gi, '')
-        .replace(/\s*-\s*(?:remaster(?:ed)?(?:\s+\d{4})?|radio edit|single version|album version|original mix).*$/gi, '')
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
         .replace(/[^\p{L}\p{N}]/gu, '');
 
+const normalizeReplacementTitle = (str = '') =>
+    normalizeReplacementText(
+        String(str)
+            .toLowerCase()
+            .replace(/\s*\((?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^)]*\)/gi, '')
+            .replace(/\s*\[(?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^\]]*\]/gi, '')
+            .replace(/\s*-\s*(?:remaster(?:ed)?(?:\s+\d{4})?|radio edit|single version|album version|original mix).*$/gi, '')
+    );
+
+const extractCoreReplacementTitle = (str = '') => {
+    const stripped = String(str)
+        .toLowerCase()
+        .replace(/\s*[([].*$/, '')
+        .replace(/\s+-\s+.*$/, '')
+        .replace(/^(?:اغنية|أغنية|اغنيه|مهرجان)\s+/i, '');
+    return normalizeReplacementText(stripped) || normalizeReplacementTitle(str);
+};
+
+const sanitizeSpotifySearchQuery = (str = '') =>
+    String(str)
+        .replace(/[()[\]"':\-–—/\\]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
 /**
- * 3-Tier Replacement Matcher for Unavailable / Locked Tracks:
+ * Multi-Tier Replacement Matcher for Unavailable / Locked Tracks:
  * Given a dead/locked track item and a pool of candidate tracks (either library `{ track }` items
  * from Stage 1 or raw Spotify track objects from Stage 2 ISRC / Stage 3 Fuzzy Search),
  * returns the highest-confidence playable replacement track.
@@ -183,9 +207,10 @@ export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSo
     const deadUri = deadTrack.uri || '';
     const deadIsrc = deadTrack.external_ids?.isrc || null;
     const deadNormTitle = normalizeReplacementTitle(deadTrack.name);
+    const deadCoreTitle = extractCoreReplacementTitle(deadTrack.name);
     const deadPrimaryArtist = normalizeReplacementText(deadTrack.artists?.[0]?.name || '');
-    const deadAllArtists = new Set(
-        (deadTrack.artists || []).map(a => normalizeReplacementText(a?.name || '')).filter(Boolean)
+    const deadAllArtists = Array.from(
+        new Set((deadTrack.artists || []).map(a => normalizeReplacementText(a?.name || '')).filter(Boolean))
     );
     const deadDuration = Number(deadTrack.duration_ms) || 0;
 
@@ -201,6 +226,7 @@ export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSo
 
         const candIsrc = candTrack.external_ids?.isrc || null;
         const candNormTitle = normalizeReplacementTitle(candTrack.name);
+        const candCoreTitle = extractCoreReplacementTitle(candTrack.name);
         const candPrimaryArtist = normalizeReplacementText(candTrack.artists?.[0]?.name || '');
         const candAllArtists = (candTrack.artists || [])
             .map(a => normalizeReplacementText(a?.name || ''))
@@ -210,7 +236,23 @@ export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSo
             ? Math.abs(candDuration - deadDuration)
             : 0;
 
+        const isExactTitle = candNormTitle === deadNormTitle;
+        const isCoreTitleMatch = Boolean(deadCoreTitle && candCoreTitle && candCoreTitle === deadCoreTitle);
+        const isContainedCoreTitle = Boolean(
+            deadCoreTitle.length >= 4 &&
+            candCoreTitle.length >= 4 &&
+            (deadCoreTitle.includes(candCoreTitle) || candCoreTitle.includes(deadCoreTitle))
+        );
+
+        const primaryMatches = Boolean(deadPrimaryArtist && candPrimaryArtist === deadPrimaryArtist);
+        const sharedArtist = candAllArtists.some(ca =>
+            deadAllArtists.some(da =>
+                ca === da || (ca.length >= 4 && da.length >= 4 && (da.includes(ca) || ca.includes(da)))
+            )
+        );
+
         let tier = 0;
+        let bonus = 0;
         let matchReason = defaultSourceLabel;
 
         // Tier 3: Exact ISRC studio master match
@@ -219,26 +261,44 @@ export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSo
             matchReason = defaultSourceLabel === 'Library Cache'
                 ? 'Playable in Library (ISRC)'
                 : 'Exact ISRC Master Match';
-        } else if (candNormTitle === deadNormTitle) {
-            const primaryMatches = deadPrimaryArtist && candPrimaryArtist === deadPrimaryArtist;
-            const sharedArtist = candAllArtists.some(a => deadAllArtists.has(a));
-
-            if (primaryMatches && durationDiff <= 3000) {
-                tier = 2;
-                matchReason = defaultSourceLabel === 'Library Cache'
-                    ? 'Playable Copy in Your Library'
-                    : 'Exact Title, Artist & Duration (±2s)';
-            } else if ((primaryMatches || sharedArtist) && durationDiff <= 5000) {
-                tier = 1;
+        } else if (isExactTitle && primaryMatches && durationDiff <= 3000) {
+            // Tier 2: Exact normalized title + primary artist + duration within ±3s
+            tier = 2;
+            matchReason = defaultSourceLabel === 'Library Cache'
+                ? 'Playable Copy in Your Library'
+                : 'Exact Title, Artist & Duration (±2s)';
+        } else if ((isExactTitle || isCoreTitleMatch || isContainedCoreTitle) && (primaryMatches || sharedArtist)) {
+            // Tier 1: Same/shared artist with exact, core, or contained title
+            tier = 1;
+            if (isExactTitle && durationDiff <= 5000) {
+                bonus = 200;
                 matchReason = defaultSourceLabel === 'Library Cache'
                     ? 'Playable Copy in Your Library'
                     : 'Title & Artist Match (±5s)';
+            } else {
+                const matchedArtistDisplay = candTrack.artists?.[0]?.name || '';
+                matchReason = defaultSourceLabel === 'Library Cache'
+                    ? 'Playable Copy in Your Library'
+                    : matchedArtistDisplay
+                        ? `Same Artist & Title (${matchedArtistDisplay})`
+                        : 'Same Artist & Title Match';
+            }
+        } else if ((isExactTitle || isCoreTitleMatch) && deadCoreTitle.length >= 3) {
+            // Tier 0.5: Exact/Core Title match by an alternative/original artist when the dead uploader is delisted
+            const allowInLibrary = isExactTitle && durationDiff <= 2500;
+            const allowInSearch = defaultSourceLabel !== 'Library Cache' && durationDiff <= 15000;
+            if (allowInLibrary || allowInSearch) {
+                tier = 0.5;
+                const altArtistDisplay = candTrack.artists?.[0]?.name || 'Spotify';
+                matchReason = durationDiff <= 3000
+                    ? `Same Title & Duration (${altArtistDisplay})`
+                    : `Alternative Version (${altArtistDisplay})`;
             }
         }
 
         if (tier > 0) {
             const pop = Number(candTrack.popularity) || 0;
-            const score = tier * 1000 + pop - Math.round(durationDiff / 100);
+            const score = tier * 1000 + bonus + pop - Math.round(durationDiff / 100);
             if (!bestMatch || score > bestMatch.score) {
                 bestMatch = {
                     track: candTrack,
@@ -279,7 +339,7 @@ export const matchLocalLibraryReplacements = (scopeTracks = [], candidatePool = 
 };
 
 /**
- * Chain-of-Responsibility + Dependency Inversion (Stage 2 ISRC -> Stage 3 Fuzzy Title + Artist):
+ * Chain-of-Responsibility + Dependency Inversion (Stage 2 ISRC -> Stage 3 Multi-Pass Free-Text & Core Title):
  * Resolves a playable replacement for a single dead track using an injected `searchTracksFn(query, limit)`.
  */
 export const resolveSpotifyTrackReplacement = async (deadItem, searchTracksFn) => {
@@ -294,17 +354,57 @@ export const resolveSpotifyTrackReplacement = async (deadItem, searchTracksFn) =
             const isrcMatch = findBestPlayableReplacement(deadItem, isrcCandidates, 'Spotify ISRC');
             if (isrcMatch) return isrcMatch;
         } catch (_) {
-            // Fall through to Stage 3 Fuzzy Search
+            // Fall through to Stage 3 Multi-Pass Search
         }
     }
 
-    // Stage 3: Fuzzy Title + Primary Artist + Duration (±3s) lookup
+    // Stage 3: Multi-Pass Free-Text & Core-Title Search (avoids unescaped '-' NOT operator & includes co-artists)
     try {
-        const cleanTitle = (t.name || '').replace(/[()[\]"']/g, ' ').trim();
-        const primaryArtist = (t.artists?.[0]?.name || '').replace(/[()[\]"']/g, ' ').trim();
-        const query = primaryArtist ? `track:${cleanTitle} artist:${primaryArtist}` : cleanTitle;
-        const searchCandidates = await searchTracksFn(query, 10);
-        return findBestPlayableReplacement(deadItem, searchCandidates, 'Spotify Search');
+        const cleanTitle = sanitizeSpotifySearchQuery(t.name);
+        const coreSearchTitle = sanitizeSpotifySearchQuery(
+            String(t.name)
+                .replace(/\s*[([].*$/, '')
+                .replace(/\s+-\s+.*$/, '')
+                .replace(/^(?:اغنية|أغنية|اغنيه|مهرجان)\s+/i, '')
+        ) || cleanTitle;
+
+        const artistList = (t.artists || []).map(a => sanitizeSpotifySearchQuery(a?.name || '')).filter(Boolean);
+        const allArtistsQuery = artistList.slice(0, 3).join(' ');
+        const primaryQuery = allArtistsQuery ? `${cleanTitle} ${allArtistsQuery}` : cleanTitle;
+
+        const collectedCandidates = [];
+        const primaryCandidates = await searchTracksFn(primaryQuery, 10);
+        if (Array.isArray(primaryCandidates)) {
+            collectedCandidates.push(...primaryCandidates);
+        }
+
+        const initialMatch = findBestPlayableReplacement(deadItem, collectedCandidates, 'Spotify Search');
+        if (initialMatch && initialMatch.tier >= 1) {
+            return initialMatch;
+        }
+
+        // Fallback pass: if title had suffixes/prefixes or multiple collaborators (e.g., sponsor in artists[0]),
+        // or if the cover uploader was delisted and only core title matches exist on Spotify
+        const fallbackQueries = new Set();
+        if (artistList.length > 1) {
+            fallbackQueries.add(`${coreSearchTitle} ${artistList.slice(1, 3).join(' ')}`);
+        }
+        if (coreSearchTitle !== primaryQuery) {
+            fallbackQueries.add(coreSearchTitle);
+        }
+
+        for (const fbQuery of fallbackQueries) {
+            const fbCandidates = await searchTracksFn(fbQuery, 10);
+            if (Array.isArray(fbCandidates)) {
+                collectedCandidates.push(...fbCandidates);
+            }
+            const fbMatch = findBestPlayableReplacement(deadItem, collectedCandidates, 'Spotify Search');
+            if (fbMatch && fbMatch.tier >= 1) {
+                return fbMatch;
+            }
+        }
+
+        return findBestPlayableReplacement(deadItem, collectedCandidates, 'Spotify Search');
     } catch (_) {
         return null;
     }
