@@ -80,14 +80,33 @@ export const fetchProfile = async (token) => {
     const result = await fetchWithRetry("https://api.spotify.com/v1/me", {
         method: "GET", headers: { Authorization: `Bearer ${token}` }
     });
-    return await result.json();
+    const body = await result.json().catch(() => ({}));
+    if (!result.ok) {
+        return { error: body.error || { status: result.status, message: result.statusText }, status: result.status };
+    }
+    return body;
 };
 
-export const fetchUserPlaylists = async (token, limit = 20) => {
+export const fetchUserPlaylists = async (token, limit = 50) => {
     const result = await fetchWithRetry(`https://api.spotify.com/v1/me/playlists?limit=${limit}`, {
         method: "GET", headers: { Authorization: `Bearer ${token}` }
     });
-    return await result.json();
+    const body = await result.json().catch(() => ({}));
+    if (!result.ok) {
+        return { error: body.error || { status: result.status, message: result.statusText }, status: result.status, items: [] };
+    }
+    let allItems = body.items || [];
+    let nextUrl = body.next || null;
+    while (nextUrl) {
+        const nextRes = await fetchWithRetry(nextUrl, {
+            method: "GET", headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!nextRes.ok) break;
+        const nextData = await nextRes.json().catch(() => ({}));
+        allItems = [...allItems, ...(nextData.items || [])];
+        nextUrl = nextData.next || null;
+    }
+    return { ...body, items: allItems };
 };
 
 export const fetchTracksBatch = async (token, url) => {

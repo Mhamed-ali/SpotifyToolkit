@@ -26,11 +26,31 @@ function App() {
     // AUTH & PROVIDER STATE
     // =========================================================================
     const [serverMessage, setServerMessage] = useState('Checking server connection...');
-    const [providerId, setProviderId] = useState(
-        () => localStorage.getItem('music_provider') || PROVIDERS.SPOTIFY
-    );
-    const [token, setToken] = useState(() => localStorage.getItem('spotify_access_token'));
+    const [providerId, setProviderId] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        const urlProvider = params.get('provider');
+        if (urlProvider && (urlProvider === PROVIDERS.SPOTIFY || urlProvider === PROVIDERS.ANGHAMI)) {
+            localStorage.setItem('music_provider', urlProvider);
+            return urlProvider;
+        }
+        return localStorage.getItem('music_provider') || PROVIDERS.SPOTIFY;
+    });
+    const [token, setToken] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        const urlAccess = params.get('access_token');
+        const urlRefresh = params.get('refresh_token');
+        if (urlAccess) {
+            localStorage.setItem('spotify_access_token', urlAccess);
+            if (urlRefresh) {
+                localStorage.setItem('spotify_refresh_token', urlRefresh);
+            }
+            window.history.replaceState({}, document.title, '/');
+            return urlAccess;
+        }
+        return localStorage.getItem('spotify_access_token');
+    });
     const [profile, setProfile] = useState(null);
+    const [authAccessForbidden, setAuthAccessForbidden] = useState(false);
 
     // =========================================================================
     // LIBRARY & PLAYLISTS STATE
@@ -40,6 +60,7 @@ function App() {
     const [isLoadingLibrary, setIsLoadingLibrary] = useState(false);
     const [playlistSearch, setPlaylistSearch] = useState('');
     const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+    const [isMobilePlaylistsExpanded, setIsMobilePlaylistsExpanded] = useState(false);
     const [selectedPlaylistIds, setSelectedPlaylistIds] = useState(() => new Set(['ALL']));
 
     // =========================================================================
@@ -466,30 +487,14 @@ function App() {
     useEffect(() => {
         const initAuthAndLibrary = async () => {
             const params = new URLSearchParams(window.location.search);
-            const accessToken = params.get('access_token');
-            const refreshToken = params.get('refresh_token');
-            const incomingProvider = params.get('provider');
-
-            let activeToken = token;
-            let activeProviderId = providerId;
-
-            if (incomingProvider && (incomingProvider === PROVIDERS.SPOTIFY || incomingProvider === PROVIDERS.ANGHAMI)) {
-                activeProviderId = incomingProvider;
-                setProviderId(incomingProvider);
-                localStorage.setItem('music_provider', incomingProvider);
+            const authError = params.get('error');
+            if (authError) {
+                window.history.replaceState({}, document.title, '/');
+                showToast(`Spotify login error (${authError}). Please tap Continue with Spotify again.`);
             }
 
-            if (accessToken) {
-                activeToken = accessToken;
-                setToken(accessToken);
-                localStorage.setItem('spotify_access_token', accessToken);
-                if (refreshToken) {
-                    localStorage.setItem('spotify_refresh_token', refreshToken);
-                }
-                window.history.pushState({}, null, '/');
-            }
-
-            const activeProvider = getMusicProvider(activeProviderId);
+            const activeToken = token;
+            const activeProvider = getMusicProvider(providerId);
 
             if (!activeToken) {
                 fetch('/health')
@@ -501,6 +506,7 @@ function App() {
 
             setServerMessage(`Connected to ${activeProvider.displayName}`);
             setIsLoadingLibrary(true);
+            setAuthAccessForbidden(false);
 
             try {
                 const [profData, playlistsRes, likedRes] = await Promise.all([
@@ -509,9 +515,15 @@ function App() {
                     activeProvider.fetchSavedTracks(activeToken, 0, 1).catch(err => ({ error: err }))
                 ]);
 
-                if (profData?.error?.status === 401) {
+                const profStatus = profData?.status || profData?.error?.status;
+                const plStatus = playlistsRes?.status || playlistsRes?.error?.status;
+
+                if (profStatus === 401) {
                     handleLogout();
                     return;
+                }
+                if (profStatus === 403 || plStatus === 403) {
+                    setAuthAccessForbidden(true);
                 }
                 if (!profData?.error) {
                     setProfile(profData);
@@ -1288,6 +1300,12 @@ function App() {
 
     const handlePlaylistClick = (id) => {
         setVisibleLimit(120);
+        if (activeWorkflow === 'top50' || activeWorkflow === 'compare') {
+            setActiveWorkflow('arabic-playlist');
+        }
+        if (!isMultiSelectMode) {
+            setIsMobilePlaylistsExpanded(false);
+        }
         if (id === 'ALL') {
             setIsMultiSelectMode(false);
             if (!selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size !== 1) {
@@ -1338,6 +1356,8 @@ function App() {
     // LOGIN SCREEN HANDLERS
     // =========================================================================
     const handleSpotifyLogin = () => {
+        localStorage.removeItem('spotify_access_token');
+        localStorage.removeItem('spotify_refresh_token');
         localStorage.setItem('music_provider', PROVIDERS.SPOTIFY);
         window.location.href = '/login';
     };
@@ -1898,67 +1918,98 @@ function App() {
                 {/* 3. MAIN WORKSPACE: Left Playlist Rail + Right Content Area */}
                 <div className="v2-workspace-body">
 
-                    {/* LEFT PLAYLIST RAIL (Visible across all scope-based workflows) */}
-                    {activeWorkflow !== 'compare' && activeWorkflow !== 'top50' && (
-                        <aside className="v2-playlist-sidebar">
-                            <div className="v2-sidebar-top">
-                                <span className="v2-section-label">Select Scope</span>
+                    {/* LEFT PLAYLIST RAIL (Always visible so playlists are accessible from any workflow) */}
+                    <aside className={`v2-playlist-sidebar ${isMobilePlaylistsExpanded ? 'mobile-expanded' : ''}`}>
+                        <div className="v2-sidebar-top">
+                            <span className="v2-section-label">
+                                Select Scope ({ playlistsData.length + (likedSongsCount > 0 ? 1 : 0) })
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <button
+                                    type="button"
+                                    onClick={() => setIsMobilePlaylistsExpanded(prev => !prev)}
+                                    className="v2-multi-btn v2-mobile-expand-btn"
+                                >
+                                    {isMobilePlaylistsExpanded ? '▲ Collapse' : `📋 All (${playlistsData.length})`}
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => setIsMultiSelectMode(prev => !prev)}
                                     className={`v2-multi-btn ${isMultiSelectMode ? 'active' : ''}`}
                                 >
                                     {isMultiSelectMode ? '✓ Done' : '☑ Multi-Select'}
                                 </button>
                             </div>
+                        </div>
 
-                            <div className="v2-playlist-search-wrap">
-                                <input
-                                    type="text"
-                                    value={playlistSearch}
-                                    onChange={e => setPlaylistSearch(e.target.value)}
-                                    placeholder="Search playlists..."
-                                    className="v2-input"
-                                    style={{ width: '100%' }}
-                                />
-                            </div>
+                        <div className="v2-playlist-search-wrap">
+                            <input
+                                type="text"
+                                value={playlistSearch}
+                                onChange={e => setPlaylistSearch(e.target.value)}
+                                placeholder="Search playlists..."
+                                className="v2-input"
+                                style={{ width: '100%' }}
+                            />
+                        </div>
 
-                            <div className="v2-playlist-list">
-                                {sidebarItems.map(pl => {
-                                    const isSelected = selectedPlaylistIds.has(pl.id);
-                                    return (
-                                        <button
-                                            type="button"
-                                            key={pl.id}
-                                            onClick={() => handlePlaylistClick(pl.id)}
-                                            className={`v2-playlist-item ${isSelected ? 'selected' : ''}`}
-                                            title={`${pl.name} (${pl.count} tracks)`}
-                                        >
-                                            <div className="v2-playlist-item-left">
-                                                {isMultiSelectMode ? (
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isSelected}
-                                                        readOnly
-                                                        style={{ accentColor: 'var(--brand)', pointerEvents: 'none' }}
-                                                    />
-                                                ) : (
-                                                    <span>{pl.icon}</span>
-                                                )}
-                                                <div style={{ minWidth: 0 }}>
-                                                    <div className="v2-playlist-item-name">{pl.name}</div>
-                                                    <div className="v2-playlist-item-count">{pl.count} tracks</div>
-                                                </div>
+                        <div className="v2-playlist-list">
+                            {sidebarItems.map(pl => {
+                                const isSelected = selectedPlaylistIds.has(pl.id);
+                                return (
+                                    <button
+                                        type="button"
+                                        key={pl.id}
+                                        onClick={() => handlePlaylistClick(pl.id)}
+                                        className={`v2-playlist-item ${isSelected ? 'selected' : ''}`}
+                                        title={`${pl.name} (${pl.count} tracks)`}
+                                    >
+                                        <div className="v2-playlist-item-left">
+                                            {isMultiSelectMode ? (
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    readOnly
+                                                    style={{ accentColor: 'var(--brand)', pointerEvents: 'none' }}
+                                                />
+                                            ) : (
+                                                <span>{pl.icon}</span>
+                                            )}
+                                            <div className="v2-playlist-item-text">
+                                                <div className="v2-playlist-item-name">{pl.name}</div>
+                                                <div className="v2-playlist-item-count">{pl.count} tracks</div>
                                             </div>
-                                            <span className="v2-playlist-item-badge">{pl.badge}</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </aside>
-                    )}
+                                        </div>
+                                        <span className="v2-playlist-item-badge">{pl.badge}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </aside>
 
                     {/* RIGHT MAIN WORKSPACE */}
                     <main className="v2-main-content">
+
+                        {/* Warning Banner if Spotify Developer Dashboard Development Mode blocks an unregistered user (HTTP 403) */}
+                        {authAccessForbidden && (
+                            <div className="obsidian-card v2-kpi-card-danger" style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#fca5a5' }}>
+                                        ⚠️ Spotify Account Not Registered in App Dashboard (403)
+                                    </div>
+                                    <div style={{ fontSize: '0.73rem', color: '#e4e4e7', marginTop: '0.2rem', lineHeight: 1.4 }}>
+                                        Spotify apps in Development Mode only return playlists &amp; tracks for accounts whose email is added under <strong>Spotify Developer Dashboard → Users and Access</strong>. Add this account&apos;s email or switch to an authorized Spotify account.
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleSpotifyLogin}
+                                    className="v2-btn-primary brand-bg"
+                                >
+                                    🔄 Switch Spotify Account
+                                </button>
+                            </div>
+                        )}
 
                         {/* Live Track Analysis Visualizer Card */}
                         {scanProgress && (
@@ -2237,7 +2288,7 @@ function App() {
                                         </div>
                                     </div>
                                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                        Real-time Spotify <code className="brand-text">/v1/me/top/tracks</code> &amp; <code className="brand-text">/v1/me/player/recently-played</code>
+                                        Live Spotify Listening History &amp; Personal Top Charts
                                     </span>
                                 </div>
 
@@ -2248,7 +2299,7 @@ function App() {
                                                 🔓 Approve Spotify Top 50 &amp; History Permission
                                             </div>
                                             <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                                                Your current login session was created before the <code className="brand-text">user-top-read</code> and <code className="brand-text">user-read-recently-played</code> scopes were enabled. Click to re-approve in 1 click!
+                                                Please reconnect your Spotify account in 1 click to grant permission to load your personal Top 50 &amp; recently played tracks.
                                             </div>
                                         </div>
                                         <button

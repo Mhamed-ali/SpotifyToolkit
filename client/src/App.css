@@ -531,6 +531,14 @@
   font-weight: 700;
 }
 
+.v2-mobile-expand-btn {
+  display: none;
+}
+
+.v2-playlist-item-text {
+  min-width: 0;
+}
+
 .v2-playlist-search-wrap {
   flex-shrink: 0;
 }
@@ -1575,7 +1583,12 @@
     flex-direction: column;
   }
 
-  /* Clean, Scrollbar-Free Horizontal Swipeable Playlist Pills on Phone */
+  /* Clean, Scrollbar-Free Horizontal Swipeable Playlist Pills on Phone + Expandable Drawer */
+  .v2-mobile-expand-btn {
+    display: inline-flex;
+    align-items: center;
+  }
+
   .v2-playlist-sidebar {
     width: 100%;
     border-right: none;
@@ -1586,6 +1599,10 @@
 
   .v2-playlist-search-wrap {
     display: none;
+  }
+
+  .v2-playlist-sidebar.mobile-expanded .v2-playlist-search-wrap {
+    display: block;
   }
 
   .v2-playlist-list {
@@ -1606,6 +1623,14 @@
     height: 0;
   }
 
+  .v2-playlist-sidebar.mobile-expanded .v2-playlist-list {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: 240px;
+    gap: 0.32rem;
+  }
+
   .v2-playlist-item {
     width: auto;
     flex-shrink: 0;
@@ -1613,9 +1638,20 @@
     border-radius: 9999px;
   }
 
+  .v2-playlist-sidebar.mobile-expanded .v2-playlist-item {
+    width: 100%;
+    border-radius: 10px;
+    padding: 0.45rem 0.65rem;
+  }
+
   .v2-playlist-item-count,
   .v2-playlist-item-badge {
     display: none;
+  }
+
+  .v2-playlist-sidebar.mobile-expanded .v2-playlist-item-count,
+  .v2-playlist-sidebar.mobile-expanded .v2-playlist-item-badge {
+    display: block;
   }
 
   .v2-user-meta,

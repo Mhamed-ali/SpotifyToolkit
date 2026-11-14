@@ -841,7 +841,40 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
             global.setTimeout = origSetTimeout2;
         }
 
-        // 5. Test non-OK error throws on fetchPlaylistTracks, fetchSavedTracks, removeTracksFromPlaylist
+        // 5. Test non-OK error throws on fetchPlaylistTracks, fetchSavedTracks, removeTracksFromPlaylist, and structured error/pagination on fetchProfile & fetchUserPlaylists
+        global.fetch = async () => ({
+            ok: false,
+            status: 403,
+            statusText: 'Forbidden',
+            json: async () => { throw new SyntaxError('Unexpected token U in JSON'); }
+        });
+        const forbiddenProfile = await spotifyService.fetchProfile('tok');
+        assert.equal(forbiddenProfile.status, 403);
+        const forbiddenPlaylists = await spotifyService.fetchUserPlaylists('tok');
+        assert.equal(forbiddenPlaylists.status, 403);
+        assert.deepEqual(forbiddenPlaylists.items, []);
+
+        // Test fetchUserPlaylists multi-page pagination
+        global.fetch = async (url) => {
+            if (url.includes('offset=50')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ items: [{ id: 'pl_page2', name: 'Page 2' }], next: null })
+                };
+            }
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    items: [{ id: 'pl_page1', name: 'Page 1' }],
+                    next: 'https://api.spotify.com/v1/me/playlists?offset=50&limit=50'
+                })
+            };
+        };
+        const pagedUserPlaylists = await spotifyService.fetchUserPlaylists('tok');
+        assert.equal(pagedUserPlaylists.items.length, 2);
+
         global.fetch = async () => ({ ok: false, status: 403, statusText: 'Forbidden' });
         await assert.rejects(() => spotifyService.fetchPlaylistTracks('tok', 'p1'), { status: 403 });
         await assert.rejects(() => spotifyService.fetchSavedTracks('tok'), { status: 403 });
