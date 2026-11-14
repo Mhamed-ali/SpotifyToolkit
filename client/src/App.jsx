@@ -140,8 +140,15 @@ function App() {
             return tracksCacheRef.current[pid];
         }
 
-        if (inFlightPromisesRef.current[pid]) {
-            return inFlightPromisesRef.current[pid];
+        const existingInFlight = inFlightPromisesRef.current[pid];
+        if (existingInFlight) {
+            if (typeof onBatchProgress === 'function') {
+                existingInFlight.listeners.add(onBatchProgress);
+                if (existingInFlight.lastLoaded > 0) {
+                    onBatchProgress(existingInFlight.lastLoaded, existingInFlight.lastTotal);
+                }
+            }
+            return existingInFlight.promise;
         }
 
         const total = playlistObj.tracks?.total || 0;
@@ -152,22 +159,44 @@ function App() {
             collaborative: playlistObj.collaborative
         };
 
+        const listeners = new Set();
+        if (typeof onBatchProgress === 'function') {
+            listeners.add(onBatchProgress);
+        }
+
+        const inFlightEntry = {
+            promise: null,
+            listeners,
+            lastLoaded: 0,
+            lastTotal: total
+        };
+
+        const notifyProgress = (loaded, actualTotal) => {
+            inFlightEntry.lastLoaded = loaded;
+            inFlightEntry.lastTotal = actualTotal;
+            inFlightEntry.listeners.forEach(fn => {
+                try {
+                    fn(loaded, actualTotal);
+                } catch (_) {
+                    // Ignore listener errors
+                }
+            });
+        };
+
         const fetchPromise = (async () => {
             let rawItems = [];
             if (pid === PLAYLIST_IDS.LIKED_SONGS) {
                 const firstPage = await activeProvider.fetchSavedTracks(activeToken, 0, 50);
                 const firstItems = firstPage?.items || [];
                 const actualTotal = firstPage?.total ?? total;
-                if (typeof onBatchProgress === 'function') {
-                    onBatchProgress(firstItems.length, actualTotal);
-                }
+                notifyProgress(firstItems.length, actualTotal);
                 if (actualTotal > firstItems.length) {
                     const rest = await activeProvider.fetchRemainingTracks(
                         activeToken,
                         actualTotal,
                         'me',
                         null,
-                        onBatchProgress
+                        notifyProgress
                     );
                     rawItems = [...firstItems, ...(rest || [])];
                 } else {
@@ -178,7 +207,7 @@ function App() {
                     activeToken,
                     pid,
                     total,
-                    onBatchProgress
+                    notifyProgress
                 );
             }
 
@@ -194,7 +223,8 @@ function App() {
             throw err;
         });
 
-        inFlightPromisesRef.current[pid] = fetchPromise;
+        inFlightEntry.promise = fetchPromise;
+        inFlightPromisesRef.current[pid] = inFlightEntry;
         return fetchPromise;
     }, [enrichTrackItem]);
 
@@ -229,6 +259,16 @@ function App() {
         }
 
         const totalPlaylists = targetPlaylists.length;
+        const totalExpectedTracks = Math.max(
+            1,
+            targetPlaylists.reduce((sum, p) => sum + (p.tracks?.total || 0), 0)
+        );
+
+        // Pass 1 maps smoothly from 2% -> 78% weighted by actual tracks analyzed
+        const calcPass1Pct = (analyzedCount) => {
+            const ratio = Math.min(1, Math.max(0, analyzedCount / totalExpectedTracks));
+            return Math.max(2, Math.min(78, Math.round(2 + ratio * 76)));
+        };
 
         // FAST-PATH: If all target playlists are already in memory cache, combine in 1 render!
         const allCached = targetPlaylists.every(pl => Boolean(tracksCacheRef.current[pl.id]));
@@ -264,11 +304,10 @@ function App() {
                     phase: 'tracks',
                     phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
                     playlistName: pl.name,
-                    current: i + 1,
-                    total: totalPlaylists,
+                    pct: calcPass1Pct(baseAccumulatedCount),
                     tracksAnalyzed: baseAccumulatedCount,
                     label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
-                    subLabel: expectedPlTotal > 100
+                    subLabel: expectedPlTotal > 0
                         ? `Scanning 0 / ${expectedPlTotal.toLocaleString()} tracks in "${pl.name}"...`
                         : `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
                 });
@@ -280,13 +319,13 @@ function App() {
                         activeProvider,
                         (loadedInPl, totalInPl) => {
                             if (loadOperationRef.current !== opId) return;
+                            const totalAnalyzedNow = baseAccumulatedCount + loadedInPl;
                             setScanProgress({
                                 phase: 'tracks',
                                 phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
                                 playlistName: pl.name,
-                                current: i + Math.min(0.95, loadedInPl / Math.max(1, totalInPl)),
-                                total: totalPlaylists,
-                                tracksAnalyzed: baseAccumulatedCount + loadedInPl,
+                                pct: calcPass1Pct(totalAnalyzedNow),
+                                tracksAnalyzed: totalAnalyzedNow,
                                 label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
                                 subLabel: `Scanning ${loadedInPl.toLocaleString()} / ${totalInPl.toLocaleString()} tracks in "${pl.name}"...`
                             });
@@ -319,19 +358,36 @@ function App() {
 
         const uniqueMissingArtistIds = Array.from(new Set(missingArtistIds));
         if (uniqueMissingArtistIds.length > 0 && activeProvider.fetchArtistsBatch) {
+            const totalArtistsToClassify = uniqueMissingArtistIds.length;
             setScanProgress({
                 phase: 'genres',
                 phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
-                playlistName: `${uniqueMissingArtistIds.length} Artists`,
-                current: totalPlaylists,
-                total: totalPlaylists,
+                playlistName: `${totalArtistsToClassify} Artists`,
+                pct: 80,
                 tracksAnalyzed: accumulated.length,
-                label: `Analyzing genres for ${uniqueMissingArtistIds.length} artists...`,
-                subLabel: `Cross-referencing Spotify MENA & Arabic genre tags across ${accumulated.length.toLocaleString()} analyzed tracks`
+                label: `Analyzing genres for ${totalArtistsToClassify.toLocaleString()} artists...`,
+                subLabel: `Classified 0 / ${totalArtistsToClassify.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
             });
 
             try {
-                const artistObjs = await activeProvider.fetchArtistsBatch(activeToken, uniqueMissingArtistIds);
+                const artistObjs = await activeProvider.fetchArtistsBatch(
+                    activeToken,
+                    uniqueMissingArtistIds,
+                    (classifiedCount, totalArtists) => {
+                        if (loadOperationRef.current !== opId) return;
+                        const ratio = Math.min(1, Math.max(0, classifiedCount / Math.max(1, totalArtists)));
+                        const pct = Math.max(80, Math.min(99, Math.round(80 + ratio * 19)));
+                        setScanProgress({
+                            phase: 'genres',
+                            phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
+                            playlistName: `${totalArtists} Artists`,
+                            pct,
+                            tracksAnalyzed: accumulated.length,
+                            label: `Analyzing genres for ${totalArtists.toLocaleString()} artists...`,
+                            subLabel: `Classified ${classifiedCount.toLocaleString()} / ${totalArtists.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
+                        });
+                    }
+                );
                 if (loadOperationRef.current !== opId) return;
                 artistObjs.forEach(artist => {
                     if (artist?.id) {
@@ -1371,7 +1427,7 @@ function App() {
                                     </div>
                                     <div className="v2-scan-right">
                                         <span className="v2-scan-stat-pill">
-                                            🎵 {(scopeTracks.length || scanProgress.tracksAnalyzed || 0).toLocaleString()} analyzed
+                                            🎵 {Math.max(scopeTracks.length, scanProgress.tracksAnalyzed || 0).toLocaleString()} analyzed
                                         </span>
                                         {isArabicWorkflow && (
                                             <span className="v2-scan-stat-pill v2-scan-stat-accent">
@@ -1384,7 +1440,7 @@ function App() {
                                             </span>
                                         )}
                                         <span className="v2-scan-pct brand-text">
-                                            {Math.round((scanProgress.current / scanProgress.total) * 100)}%
+                                            {scanProgress.pct ?? 5}%
                                         </span>
                                     </div>
                                 </div>
@@ -1392,7 +1448,7 @@ function App() {
                                     <div
                                         className={`v2-scan-progress-fill ${scanProgress.phase === 'genres' ? 'pulsing' : ''}`}
                                         style={{
-                                            width: `${Math.max(8, Math.round((scanProgress.current / scanProgress.total) * 100))}%`
+                                            width: `${Math.max(4, scanProgress.pct ?? 5)}%`
                                         }}
                                     />
                                 </div>
@@ -1415,7 +1471,9 @@ function App() {
                                 <p className="v2-view-subtitle">
                                     {activeWorkflow === 'duplicates'
                                         ? `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`
-                                        : `${advancedOptions.strictArabicExtraction ? 'Strict Arabic Mode (Title & Known Artists Only)' : 'Standard 3-Pass Detection: Script, Franco-Arab, Known Artists & Spotify Genres'}`}
+                                        : activeWorkflow === 'insights'
+                                            ? 'Interactive artist breakdown, release eras, popularity profile & track analytics'
+                                            : `${advancedOptions.strictArabicExtraction ? 'Strict Arabic Mode (Title & Known Artists Only)' : 'Standard 3-Pass Detection: Script, Franco-Arab, Known Artists & Spotify Genres'}`}
                                 </p>
                             </div>
 
@@ -1449,152 +1507,170 @@ function App() {
                             </div>
                         </div>
 
-                        {/* COLLAPSIBLE ADVANCED OPTIONS CONFIGURATION PANEL (From SpotifyToolkit 2.0) */}
-                        <div className="v2-adv-panel">
-                            <button
-                                onClick={() => setIsAdvOpen(prev => !prev)}
-                                className="v2-adv-header"
-                            >
-                                <div className="v2-adv-header-left">
-                                    <span style={{ fontSize: '0.9rem' }}>⚙️</span>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Advanced Options</span>
-                                    <span className="v2-provider-badge brand-pill">Configure</span>
-                                    <span className="v2-adv-summary">
-                                        {advancedOptions.matchCriteria === 'fuzzy'
-                                            ? `Fuzzy • ±${advancedOptions.durationTolerance}s • `
-                                            : 'Strict ID • '}
-                                        Keep {advancedOptions.keepStrategy} •{' '}
-                                        {advancedOptions.scope === 'cross' ? 'Cross-playlist' : 'Per-playlist'} •{' '}
-                                        {advancedOptions.strictArabicExtraction ? 'Strict Arabic' : 'Standard Arabic (with Genres)'}
+                        {/* COLLAPSIBLE ADVANCED OPTIONS CONFIGURATION PANEL (Context-Aware per Active Feature) */}
+                        {(activeWorkflow === 'duplicates' || isArabicWorkflow) && (
+                            <div className="v2-adv-panel">
+                                <button
+                                    onClick={() => setIsAdvOpen(prev => !prev)}
+                                    className="v2-adv-header"
+                                >
+                                    <div className="v2-adv-header-left">
+                                        <span style={{ fontSize: '0.9rem' }}>⚙️</span>
+                                        <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Advanced Options</span>
+                                        <span className="v2-provider-badge brand-pill">Configure</span>
+                                        <span className="v2-adv-summary">
+                                            {activeWorkflow === 'duplicates' ? (
+                                                <>
+                                                    {advancedOptions.matchCriteria === 'fuzzy'
+                                                        ? `Fuzzy • ±${advancedOptions.durationTolerance}s • `
+                                                        : 'Strict ID • '}
+                                                    Keep {advancedOptions.keepStrategy} •{' '}
+                                                    {advancedOptions.scope === 'cross' ? 'Cross-playlist' : 'Per-playlist'}
+                                                </>
+                                            ) : (
+                                                advancedOptions.strictArabicExtraction
+                                                    ? 'Strict Arabic (Title & Known Artists Only)'
+                                                    : 'Standard Arabic (with Genres)'
+                                            )}
+                                        </span>
+                                    </div>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                        {isAdvOpen ? '▲ Hide' : '▼ Configure'}
                                     </span>
-                                </div>
-                                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                                    {isAdvOpen ? '▲ Hide' : '▼ Configure'}
-                                </span>
-                            </button>
+                                </button>
 
-                            {isAdvOpen && (
-                                <div className="v2-adv-body">
-                                    {/* 1. Match Criteria */}
-                                    <div className="v2-adv-col">
-                                        <h4 className="v2-adv-title">Match Criteria</h4>
-                                        <div className="v2-toggle-pill-group">
-                                            <button
-                                                onClick={() => updateAdvancedOption('matchCriteria', 'strict')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'strict' ? 'active' : ''}`}
-                                            >
-                                                Strict
-                                            </button>
-                                            <button
-                                                onClick={() => updateAdvancedOption('matchCriteria', 'fuzzy')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'fuzzy' ? 'active' : ''}`}
-                                            >
-                                                Fuzzy
-                                            </button>
-                                        </div>
-                                        <p className="v2-adv-desc">
-                                            {advancedOptions.matchCriteria === 'strict'
-                                                ? 'Match exact Spotify track IDs only.'
-                                                : 'Match by normalized track name, artist & duration.'}
-                                        </p>
-                                    </div>
+                                {isAdvOpen && (
+                                    <div className="v2-adv-body">
+                                        {activeWorkflow === 'duplicates' && (
+                                            <>
+                                                {/* 1. Match Criteria */}
+                                                <div className="v2-adv-col">
+                                                    <h4 className="v2-adv-title">Match Criteria</h4>
+                                                    <div className="v2-toggle-pill-group">
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('matchCriteria', 'strict')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'strict' ? 'active' : ''}`}
+                                                        >
+                                                            Strict
+                                                        </button>
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('matchCriteria', 'fuzzy')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.matchCriteria === 'fuzzy' ? 'active' : ''}`}
+                                                        >
+                                                            Fuzzy
+                                                        </button>
+                                                    </div>
+                                                    <p className="v2-adv-desc">
+                                                        {advancedOptions.matchCriteria === 'strict'
+                                                            ? 'Match exact Spotify track IDs only.'
+                                                            : 'Match by normalized track name, artist & duration.'}
+                                                    </p>
+                                                </div>
 
-                                    {/* 2. Duration Tolerance */}
-                                    <div className="v2-adv-col">
-                                        <h4 className="v2-adv-title">
-                                            Duration Tolerance (±{advancedOptions.durationTolerance}s)
-                                        </h4>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
-                                            <input
-                                                type="range"
-                                                min="0"
-                                                max="5"
-                                                step="1"
-                                                disabled={advancedOptions.matchCriteria === 'strict'}
-                                                value={advancedOptions.durationTolerance}
-                                                onChange={e => updateAdvancedOption('durationTolerance', parseInt(e.target.value, 10))}
-                                                style={{ flex: 1, accentColor: 'var(--brand)', cursor: 'pointer' }}
-                                            />
-                                            <span style={{ fontSize: '0.76rem', fontWeight: 700 }}>
-                                                ±{advancedOptions.durationTolerance}s
-                                            </span>
-                                        </div>
-                                        <p className="v2-adv-desc">
-                                            Allow duration difference when fuzzy matching duplicates.
-                                        </p>
-                                    </div>
+                                                {/* 2. Duration Tolerance */}
+                                                <div className="v2-adv-col">
+                                                    <h4 className="v2-adv-title">
+                                                        Duration Tolerance (±{advancedOptions.durationTolerance}s)
+                                                    </h4>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="5"
+                                                            step="1"
+                                                            disabled={advancedOptions.matchCriteria === 'strict'}
+                                                            value={advancedOptions.durationTolerance}
+                                                            onChange={e => updateAdvancedOption('durationTolerance', parseInt(e.target.value, 10))}
+                                                            style={{ flex: 1, accentColor: 'var(--brand)', cursor: 'pointer' }}
+                                                        />
+                                                        <span style={{ fontSize: '0.76rem', fontWeight: 700 }}>
+                                                            ±{advancedOptions.durationTolerance}s
+                                                        </span>
+                                                    </div>
+                                                    <p className="v2-adv-desc">
+                                                        Allow duration difference when fuzzy matching duplicates.
+                                                    </p>
+                                                </div>
 
-                                    {/* 3. Deduplication Scope */}
-                                    <div className="v2-adv-col">
-                                        <h4 className="v2-adv-title">Deduplication Scope</h4>
-                                        <div className="v2-toggle-pill-group">
-                                            <button
-                                                onClick={() => updateAdvancedOption('scope', 'cross')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.scope === 'cross' ? 'active' : ''}`}
-                                            >
-                                                Cross-List
-                                            </button>
-                                            <button
-                                                onClick={() => updateAdvancedOption('scope', 'per')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.scope === 'per' ? 'active' : ''}`}
-                                            >
-                                                Per-List
-                                            </button>
-                                        </div>
-                                        <p className="v2-adv-desc">
-                                            {advancedOptions.scope === 'cross'
-                                                ? 'Find duplicates across all selected playlists.'
-                                                : 'Only find duplicates within the same playlist.'}
-                                        </p>
-                                    </div>
+                                                {/* 3. Deduplication Scope */}
+                                                <div className="v2-adv-col">
+                                                    <h4 className="v2-adv-title">Deduplication Scope</h4>
+                                                    <div className="v2-toggle-pill-group">
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('scope', 'cross')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.scope === 'cross' ? 'active' : ''}`}
+                                                        >
+                                                            Cross-List
+                                                        </button>
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('scope', 'per')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.scope === 'per' ? 'active' : ''}`}
+                                                        >
+                                                            Per-List
+                                                        </button>
+                                                    </div>
+                                                    <p className="v2-adv-desc">
+                                                        {advancedOptions.scope === 'cross'
+                                                            ? 'Find duplicates across all selected playlists.'
+                                                            : 'Only find duplicates within the same playlist.'}
+                                                    </p>
+                                                </div>
 
-                                    {/* 4. Default Keep Strategy */}
-                                    <div className="v2-adv-col">
-                                        <h4 className="v2-adv-title">Default Keep Strategy</h4>
-                                        <div className="v2-toggle-pill-group">
-                                            <button
-                                                onClick={() => updateAdvancedOption('keepStrategy', 'oldest')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'oldest' ? 'active' : ''}`}
-                                            >
-                                                Oldest
-                                            </button>
-                                            <button
-                                                onClick={() => updateAdvancedOption('keepStrategy', 'newest')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'newest' ? 'active' : ''}`}
-                                            >
-                                                Newest
-                                            </button>
-                                            <button
-                                                onClick={() => updateAdvancedOption('keepStrategy', 'popular')}
-                                                className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'popular' ? 'active' : ''}`}
-                                            >
-                                                Popular
-                                            </button>
-                                        </div>
-                                        <p className="v2-adv-desc">
-                                            Determines which copy is marked KEEP vs REMOVE.
-                                        </p>
-                                    </div>
+                                                {/* 4. Default Keep Strategy */}
+                                                <div className="v2-adv-col">
+                                                    <h4 className="v2-adv-title">Default Keep Strategy</h4>
+                                                    <div className="v2-toggle-pill-group">
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('keepStrategy', 'oldest')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'oldest' ? 'active' : ''}`}
+                                                        >
+                                                            Oldest
+                                                        </button>
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('keepStrategy', 'newest')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'newest' ? 'active' : ''}`}
+                                                        >
+                                                            Newest
+                                                        </button>
+                                                        <button
+                                                            onClick={() => updateAdvancedOption('keepStrategy', 'popular')}
+                                                            className={`v2-toggle-pill-btn ${advancedOptions.keepStrategy === 'popular' ? 'active' : ''}`}
+                                                        >
+                                                            Popular
+                                                        </button>
+                                                    </div>
+                                                    <p className="v2-adv-desc">
+                                                        Determines which copy is marked KEEP vs REMOVE.
+                                                    </p>
+                                                </div>
+                                            </>
+                                        )}
 
-                                    {/* 5. Strict Arabic Extraction */}
-                                    <div className="v2-adv-col-full">
-                                        <div>
-                                            <h4 className="v2-adv-title">Strict Arabic Extraction</h4>
-                                            <p className="v2-adv-desc">
-                                                Exclude purely English songs by Arabic artists. Ignores artist name script and Spotify artist genres, relying only on Track Title or explicitly known artists.
-                                            </p>
-                                        </div>
-                                        <button
-                                            onClick={() => updateAdvancedOption('strictArabicExtraction', !advancedOptions.strictArabicExtraction)}
-                                            className={`v2-switch ${advancedOptions.strictArabicExtraction ? 'on' : ''}`}
-                                            title="Toggle Strict Arabic Extraction"
-                                        >
-                                            <span className="v2-switch-knob" />
-                                        </button>
+                                        {/* Strict Arabic Extraction (Shown ONLY in Arabic Workflows) */}
+                                        {isArabicWorkflow && (
+                                            <div
+                                                className="v2-adv-col-full"
+                                                style={{ borderTop: 'none', paddingTop: 0, marginTop: 0 }}
+                                            >
+                                                <div>
+                                                    <h4 className="v2-adv-title">Strict Arabic Extraction</h4>
+                                                    <p className="v2-adv-desc">
+                                                        Exclude purely English songs by Arabic artists. Ignores artist name script and Spotify artist genres, relying only on Track Title or explicitly known artists.
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    onClick={() => updateAdvancedOption('strictArabicExtraction', !advancedOptions.strictArabicExtraction)}
+                                                    className={`v2-switch ${advancedOptions.strictArabicExtraction ? 'on' : ''}`}
+                                                    title="Toggle Strict Arabic Extraction"
+                                                >
+                                                    <span className="v2-switch-knob" />
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                            )}
-                        </div>
+                                )}
+                            </div>
+                        )}
 
                         {/* Inline Search + Sort + Selection Summary Bar (No Redundant Filter Chips!) */}
                         <div className="v2-toolbar">

@@ -143,7 +143,14 @@ export const fetchRemainingTracks = async (token, initialTotal, userId = null, p
                         if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
                         return res.json();
                     })
-                    .then(data => data.items || [])
+                    .then(data => {
+                        const batchItems = data.items || [];
+                        loadedExtra += batchItems.length;
+                        if (typeof onProgress === 'function') {
+                            onProgress(Math.min(limit + loadedExtra, initialTotal), initialTotal);
+                        }
+                        return batchItems;
+                    })
                     .catch(err => {
                         logger.warn(`Failed to fetch batch starting at ${offset}`, err);
                         return [];
@@ -152,17 +159,13 @@ export const fetchRemainingTracks = async (token, initialTotal, userId = null, p
         );
         chunkResults.forEach((items, idx) => {
             results[i + idx] = items;
-            loadedExtra += items.length;
         });
-        if (typeof onProgress === 'function') {
-            onProgress(limit + loadedExtra, initialTotal);
-        }
     }
 
     return results.flat().filter(item => item !== null && item !== undefined);
 };
 
-export const fetchArtistsBatch = async (token, artistIds = []) => {
+export const fetchArtistsBatch = async (token, artistIds = [], onProgress = null) => {
     if (!artistIds || artistIds.length === 0) return [];
     const uniqueIds = Array.from(new Set(artistIds.filter(Boolean)));
     const chunks = [];
@@ -171,7 +174,8 @@ export const fetchArtistsBatch = async (token, artistIds = []) => {
     }
 
     const artists = [];
-    const CONCURRENCY = 3;
+    const CONCURRENCY = 5;
+    let classifiedCount = 0;
     for (let i = 0; i < chunks.length; i += CONCURRENCY) {
         const group = chunks.slice(i, i + CONCURRENCY);
         const responses = await Promise.all(
@@ -180,9 +184,20 @@ export const fetchArtistsBatch = async (token, artistIds = []) => {
                     method: "GET", headers: { Authorization: `Bearer ${token}` }
                 })
                     .then(res => (res.ok ? res.json() : { artists: [] }))
-                    .then(data => data.artists || [])
+                    .then(data => {
+                        const batchArtists = data.artists || [];
+                        classifiedCount += chunk.length;
+                        if (typeof onProgress === 'function') {
+                            onProgress(Math.min(classifiedCount, uniqueIds.length), uniqueIds.length);
+                        }
+                        return batchArtists;
+                    })
                     .catch(err => {
                         logger.warn('Failed to fetch artists batch', err);
+                        classifiedCount += chunk.length;
+                        if (typeof onProgress === 'function') {
+                            onProgress(Math.min(classifiedCount, uniqueIds.length), uniqueIds.length);
+                        }
                         return [];
                     })
             )
