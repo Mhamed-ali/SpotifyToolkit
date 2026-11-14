@@ -5,4 +5,7 @@
 5: list the avilable featuers [done]
 6: liked songs doesnt have a logo when opened [done]
 7: add mobile support [done]
-8: add Anghami integration & SOLID/Clean Code architecture [done]
+8: add SOLID/Clean Code architecture & unit test suites [done]
+9: upgrade to Toolkit v2.0 Obsidian Workspace with 2-pass progressive loading & windowed rendering [done]
+10: add Compare & Sync, Top 50 & History, Permanent Playlist Reordering, and Spotify Mini-Player [done]
+11: merge Smart Genre Family Splitter into Insights & add 3-Stage Unavailable Track Replacement Engine [done]
