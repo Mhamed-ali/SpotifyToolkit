@@ -23,7 +23,6 @@ const spotifyProvider = {
     fetchRemainingTracks: spotifyService.fetchRemainingTracks,
     fetchAllTracksForPlaylist: spotifyService.fetchAllTracksForPlaylist,
     fetchArtistsBatch: spotifyService.fetchArtistsBatch,
-    fetchAudioFeatures: spotifyService.fetchAudioFeatures,
     removeTracksFromPlaylist: spotifyService.removeTracksFromPlaylist,
     createPlaylist: spotifyService.createPlaylist,
     addTracksToPlaylist: spotifyService.addTracksToPlaylist,

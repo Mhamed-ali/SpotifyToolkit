@@ -1,3 +1,28 @@
+import { isTrackUnplayableOrLocal } from './analysis.utils.js';
+
+/**
+ * Strategy Pattern: Keep-Strategy comparators for deciding which duplicate copy is marked KEEP (index 0).
+ */
+const KEEP_STRATEGIES = {
+    popular: (a, b) => (b.track?.popularity || 0) - (a.track?.popularity || 0),
+    newest: (a, b) => {
+        const dateA = a._addedAtMs || 0;
+        const dateB = b._addedAtMs || 0;
+        if (dateA !== dateB && dateA > 0 && dateB > 0) {
+            return dateB - dateA;
+        }
+        return (b._releaseYear || 0) - (a._releaseYear || 0);
+    },
+    oldest: (a, b) => {
+        const dateA = a._addedAtMs || 0;
+        const dateB = b._addedAtMs || 0;
+        if (dateA !== dateB && dateA > 0 && dateB > 0) {
+            return dateA - dateB;
+        }
+        return (a._releaseYear || 9999) - (b._releaseYear || 9999);
+    }
+};
+
 /**
  * Single-Responsibility Service for Duplicate Detection, 2-Pass Clustering, & Composite Key Selection.
  * Supports both Strict (exact track ID) and Fuzzy (Unicode-normalized title + artist + duration tolerance)
@@ -158,5 +183,64 @@ export class DuplicateDetector {
         }
 
         return finalClusters;
+    }
+
+    /**
+     * Decorator + Strategy Pattern:
+     * Sorts a duplicate cluster so that playable copies ALWAYS precede unplayable/locked copies
+     * (Playable-First Rule), then delegates tie-breaking to the selected Keep Strategy ('oldest' | 'newest' | 'popular').
+     */
+    static sortClusterByKeepStrategy(cluster = [], keepStrategy = 'oldest') {
+        const strategyComparator = KEEP_STRATEGIES[keepStrategy] || KEEP_STRATEGIES.oldest;
+        return [...cluster].sort((a, b) => {
+            const deadA = isTrackUnplayableOrLocal(a);
+            const deadB = isTrackUnplayableOrLocal(b);
+            if (deadA !== deadB) {
+                return deadA ? 1 : -1;
+            }
+            return strategyComparator(a, b);
+        });
+    }
+
+    /**
+     * Evaluates duplicate clusters for a track list and assigns 'KEEP' (1st item) vs 'REMOVE' (remaining items).
+     */
+    static resolveDuplicateClusters(
+        tracks = [],
+        {
+            matchCriteria = 'fuzzy',
+            durationTolerance = 2,
+            scope = 'per',
+            keepStrategy = 'oldest'
+        } = {}
+    ) {
+        const dupeClusters = DuplicateDetector.clusterTracks(tracks, {
+            matchCriteria,
+            durationTolerance,
+            scope
+        });
+
+        const statusMap = {};
+        let removeCount = 0;
+        const duplicateInstanceOrder = [];
+
+        dupeClusters.forEach(cluster => {
+            const sorted = DuplicateDetector.sortClusterByKeepStrategy(cluster, keepStrategy);
+            sorted.forEach((item, idx) => {
+                if (idx === 0) {
+                    statusMap[item._selectionKey] = 'KEEP';
+                } else {
+                    statusMap[item._selectionKey] = 'REMOVE';
+                    removeCount++;
+                }
+                duplicateInstanceOrder.push(item);
+            });
+        });
+
+        return {
+            duplicateInstanceOrder,
+            duplicateStatusMap: statusMap,
+            duplicateRemoveCount: removeCount
+        };
     }
 }

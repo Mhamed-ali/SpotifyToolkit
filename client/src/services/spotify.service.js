@@ -245,14 +245,6 @@ export const fetchPlaylist = async (token, playlistId) => {
     return await result.json();
 };
 
-export const fetchAudioFeatures = async (token, trackIds) => {
-    const idsString = trackIds.join(',');
-    const result = await fetchWithRetry(`https://api.spotify.com/v1/audio-features?ids=${idsString}`, {
-        method: "GET", headers: { Authorization: `Bearer ${token}` }
-    });
-    return await result.json();
-};
-
 export const removeTracksFromPlaylist = async (token, playlistId, trackUris) => {
     const isLiked = playlistId === PLAYLIST_IDS.LIKED_SONGS;
     const batchSize = isLiked ? 50 : 100;

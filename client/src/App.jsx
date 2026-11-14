@@ -13,7 +13,8 @@ import {
     computeSmartSplitBuckets,
     comparePlaylistTracks,
     isTrackUnplayableOrLocal,
-    findBestPlayableReplacement
+    matchLocalLibraryReplacements,
+    resolveSpotifyTrackReplacement
 } from './services/analysis.utils';
 import { formatDuration, extractReleaseYear } from './utils/formatters';
 import { createClientLogger } from './utils/logger';
@@ -731,50 +732,15 @@ function App() {
         const isMultiScope = selectedPlaylistIds.has('ALL') || selectedPlaylistIds.size > 1;
         const effectiveScope = isMultiScope ? advancedOptions.scope : 'per';
 
-        const dupeClusters = DuplicateDetector.clusterTracks(evaluatedRawTracks, {
+        const {
+            duplicateInstanceOrder,
+            duplicateStatusMap: statusMap,
+            duplicateRemoveCount: removeCount
+        } = DuplicateDetector.resolveDuplicateClusters(evaluatedRawTracks, {
             matchCriteria: advancedOptions.matchCriteria,
             durationTolerance: advancedOptions.durationTolerance,
-            scope: effectiveScope
-        });
-
-        const statusMap = {};
-        let removeCount = 0;
-        const duplicateInstanceOrder = [];
-
-        dupeClusters.forEach(cluster => {
-            const sorted = [...cluster].sort((a, b) => {
-                // Playable-First Rule: If one copy is playable and another copy of the same song
-                // is locked/unplayable, ALWAYS mark the playable copy as KEEP and the locked copy as REMOVE!
-                const deadA = isTrackUnplayableOrLocal(a);
-                const deadB = isTrackUnplayableOrLocal(b);
-                if (deadA !== deadB) {
-                    return deadA ? 1 : -1;
-                }
-
-                if (advancedOptions.keepStrategy === 'popular') {
-                    return (b.track?.popularity || 0) - (a.track?.popularity || 0);
-                }
-                const dateA = a._addedAtMs || 0;
-                const dateB = b._addedAtMs || 0;
-                if (dateA !== dateB && dateA > 0 && dateB > 0) {
-                    return advancedOptions.keepStrategy === 'newest'
-                        ? dateB - dateA
-                        : dateA - dateB;
-                }
-                return advancedOptions.keepStrategy === 'newest'
-                    ? (b._releaseYear || 0) - (a._releaseYear || 0)
-                    : (a._releaseYear || 9999) - (b._releaseYear || 9999);
-            });
-
-            sorted.forEach((item, idx) => {
-                if (idx === 0) {
-                    statusMap[item._selectionKey] = 'KEEP';
-                } else {
-                    statusMap[item._selectionKey] = 'REMOVE';
-                    removeCount++;
-                }
-                duplicateInstanceOrder.push(item);
-            });
+            scope: effectiveScope,
+            keepStrategy: advancedOptions.keepStrategy
         });
 
         // In 'duplicates' workflow, show every duplicate cluster instance in grouped order (KEEP followed by REMOVE)
@@ -832,23 +798,9 @@ function App() {
 
     // STAGE 1 (0 API Calls): Automatically cross-match any dead/locked tracks against playable tracks in local cache
     const localDeadReplacementsMap = useMemo(() => {
-        const deadItems = scopeTracks.filter(item => isTrackUnplayableOrLocal(item) && !item.track?.is_local && item.track?.id);
-        if (deadItems.length === 0) return {};
-
         const cachedLists = Object.values(tracksCacheRef.current);
         const allItems = cachedLists.length > 0 ? cachedLists.flat() : rawScopeTracks;
-        const playablePool = allItems.filter(item => !isTrackUnplayableOrLocal(item));
-        if (playablePool.length === 0) return {};
-
-        const matched = {};
-        deadItems.forEach(deadItem => {
-            const tid = deadItem.track.id;
-            const found = findBestPlayableReplacement(deadItem, playablePool, 'Library Cache');
-            if (found) {
-                matched[tid] = found;
-            }
-        });
-        return matched;
+        return matchLocalLibraryReplacements(scopeTracks, allItems);
     }, [scopeTracks, rawScopeTracks]);
 
     const effectiveDeadReplacements = useMemo(
@@ -1060,37 +1012,11 @@ function App() {
         const discovered = {};
 
         try {
+            const searchFn = (query, limit) => provider.searchTracks(token, query, limit);
             for (const deadItem of unresolvedDead) {
-                const t = deadItem.track;
-                const tid = t.id;
-                let match = null;
-
-                // Stage 2: Exact ISRC master recording lookup
-                const isrc = t.external_ids?.isrc;
-                if (isrc) {
-                    try {
-                        const isrcCandidates = await provider.searchTracks(token, `isrc:${isrc}`, 10);
-                        match = findBestPlayableReplacement(deadItem, isrcCandidates, 'Spotify ISRC');
-                    } catch (err) {
-                        logger.warn(`ISRC lookup failed for ${t.name}`, err);
-                    }
-                }
-
-                // Stage 3: Fuzzy Title + Primary Artist + Duration (±2s) lookup
-                if (!match) {
-                    try {
-                        const cleanTitle = (t.name || '').replace(/[()[\]"']/g, ' ').trim();
-                        const primaryArtist = (t.artists?.[0]?.name || '').replace(/[()[\]"']/g, ' ').trim();
-                        const query = primaryArtist
-                            ? `track:${cleanTitle} artist:${primaryArtist}`
-                            : cleanTitle;
-                        const searchCandidates = await provider.searchTracks(token, query, 10);
-                        match = findBestPlayableReplacement(deadItem, searchCandidates, 'Spotify Search');
-                    } catch (err) {
-                        logger.warn(`Fuzzy search lookup failed for ${t.name}`, err);
-                    }
-                }
-
+                const tid = deadItem.track?.id;
+                if (!tid) continue;
+                const match = await resolveSpotifyTrackReplacement(deadItem, searchFn);
                 if (match) {
                     discovered[tid] = match;
                     newlyFoundCount++;

@@ -255,6 +255,62 @@ export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSo
 };
 
 /**
+ * Stage 1 (0 API Calls): Cross-matches dead/locked tracks in `scopeTracks` against a pool of
+ * playable tracks already cached in the user's library.
+ */
+export const matchLocalLibraryReplacements = (scopeTracks = [], candidatePool = []) => {
+    const deadItems = (scopeTracks || []).filter(
+        item => isTrackUnplayableOrLocal(item) && !item?.track?.is_local && item?.track?.id
+    );
+    if (deadItems.length === 0) return {};
+
+    const playablePool = (candidatePool || []).filter(item => !isTrackUnplayableOrLocal(item));
+    if (playablePool.length === 0) return {};
+
+    const matched = {};
+    deadItems.forEach(deadItem => {
+        const tid = deadItem.track.id;
+        const found = findBestPlayableReplacement(deadItem, playablePool, 'Library Cache');
+        if (found) {
+            matched[tid] = found;
+        }
+    });
+    return matched;
+};
+
+/**
+ * Chain-of-Responsibility + Dependency Inversion (Stage 2 ISRC -> Stage 3 Fuzzy Title + Artist):
+ * Resolves a playable replacement for a single dead track using an injected `searchTracksFn(query, limit)`.
+ */
+export const resolveSpotifyTrackReplacement = async (deadItem, searchTracksFn) => {
+    const t = deadItem?.track || deadItem;
+    if (!t || !t.name || typeof searchTracksFn !== 'function') return null;
+
+    // Stage 2: Exact ISRC master recording lookup
+    const isrc = t.external_ids?.isrc;
+    if (isrc) {
+        try {
+            const isrcCandidates = await searchTracksFn(`isrc:${isrc}`, 10);
+            const isrcMatch = findBestPlayableReplacement(deadItem, isrcCandidates, 'Spotify ISRC');
+            if (isrcMatch) return isrcMatch;
+        } catch (_) {
+            // Fall through to Stage 3 Fuzzy Search
+        }
+    }
+
+    // Stage 3: Fuzzy Title + Primary Artist + Duration (±3s) lookup
+    try {
+        const cleanTitle = (t.name || '').replace(/[()[\]"']/g, ' ').trim();
+        const primaryArtist = (t.artists?.[0]?.name || '').replace(/[()[\]"']/g, ' ').trim();
+        const query = primaryArtist ? `track:${cleanTitle} artist:${primaryArtist}` : cleanTitle;
+        const searchCandidates = await searchTracksFn(query, 10);
+        return findBestPlayableReplacement(deadItem, searchCandidates, 'Spotify Search');
+    } catch (_) {
+        return null;
+    }
+};
+
+/**
  * Classifies a track into one of 6 Smart Splitter Genre Family buckets using real Spotify Artist Genres
  * and Arabic detection metadata.
  */

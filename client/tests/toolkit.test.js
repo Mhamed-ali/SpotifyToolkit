@@ -24,10 +24,17 @@ import {
     classifyGenreBucket,
     computeSmartSplitBuckets,
     comparePlaylistTracks,
-    findBestPlayableReplacement
+    findBestPlayableReplacement,
+    matchLocalLibraryReplacements,
+    resolveSpotifyTrackReplacement
 } from '../src/services/analysis.utils.js';
 import * as spotifyService from '../src/services/spotify.service.js';
-import { ANALYSIS_MODULES, ANALYSIS_MODULE_MAP } from '../src/config/analysisRegistry.js';
+import {
+    ANALYSIS_MODULES,
+    ANALYSIS_MODULE_MAP,
+    WORKFLOW_MODULES,
+    WORKFLOW_MODULE_MAP
+} from '../src/config/analysisRegistry.js';
 import { getMusicProvider, PROVIDERS } from '../src/providers/ProviderFactory.js';
 import { formatDuration, formatDurationMinutes, formatDate, extractReleaseYear } from '../src/utils/formatters.js';
 import { createClientLogger, getRecentClientLogs } from '../src/utils/logger.js';
@@ -154,6 +161,10 @@ test('Suite 4 — ArabicDetector (3-Tier Script, Keyword, Strict & Broad Artist,
         ArabicDetector.detectByGenres(['egyptian pop'], true),
         null
     );
+    assert.equal(
+        ArabicDetector.detectByGenres(['indie rock', 'synthwave', null], false),
+        null
+    );
 });
 
 test('Suite 5 — TrackSpecifications & TrackFilterEngine (Primary, Collab, Year, Arabic, AND/OR)', () => {
@@ -275,6 +286,63 @@ test('Suite 6 — DuplicateDetector (Per-Playlist vs Overall, Duration Matching 
     assert.equal(sortedGroups.length, 2);
     assert.equal(sortedGroups[0][0].sourcePlaylist.name, 'A Playlist');
     assert.equal(sortedGroups[1][0].sourcePlaylist.name, 'B Playlist');
+
+    // Test multi-subcluster split inside fuzzy clustering (lines 148-149)
+    const multiSubClusterItems = [
+        { sourcePlaylist: { id: 'p1' }, track: { id: 'a1', name: 'Roma', duration_ms: 200000, artists: [{ name: 'Cairokee' }] } },
+        { sourcePlaylist: { id: 'p1' }, track: { id: 'a2', name: 'Roma', duration_ms: 201000, artists: [{ name: 'Cairokee' }] } },
+        { sourcePlaylist: { id: 'p1' }, track: { id: 'b1', name: 'Roma', duration_ms: 260000, artists: [{ name: 'Cairokee' }] } },
+        { sourcePlaylist: { id: 'p1' }, track: { id: 'b2', name: 'Roma', duration_ms: 261000, artists: [{ name: 'Cairokee' }] } }
+    ];
+    const twoSubClusters = DuplicateDetector.clusterTracks(multiSubClusterItems, {
+        matchCriteria: 'fuzzy',
+        durationTolerance: 2,
+        scope: 'per'
+    });
+    assert.equal(twoSubClusters.length, 2);
+
+    // Test Playable-First Keep Strategy Decorator + Strategy Map ('oldest', 'newest', 'popular')
+    const lockedOldCopy = {
+        _selectionKey: 'p1::dead::0',
+        _addedAtMs: 1000,
+        _releaseYear: 2019,
+        sourcePlaylist: { id: 'p1' },
+        track: { id: 'dead', name: 'Roma', duration_ms: 240000, popularity: 99, is_playable: false, artists: [{ name: 'Cairokee' }] }
+    };
+    const playableNewerCopy = {
+        _selectionKey: 'p1::live1::1',
+        _addedAtMs: 2000,
+        _releaseYear: 2021,
+        sourcePlaylist: { id: 'p1' },
+        track: { id: 'live1', name: 'Roma', duration_ms: 240500, popularity: 50, is_playable: true, artists: [{ name: 'Cairokee' }] }
+    };
+    const playablePopularCopy = {
+        _selectionKey: 'p1::live2::2',
+        _addedAtMs: 3000,
+        _releaseYear: 2022,
+        sourcePlaylist: { id: 'p1' },
+        track: { id: 'live2', name: 'Roma', duration_ms: 240800, popularity: 85, is_playable: true, artists: [{ name: 'Cairokee' }] }
+    };
+
+    const resolvedOldest = DuplicateDetector.resolveDuplicateClusters(
+        [lockedOldCopy, playableNewerCopy, playablePopularCopy],
+        { matchCriteria: 'fuzzy', durationTolerance: 2, scope: 'per', keepStrategy: 'oldest' }
+    );
+    assert.equal(resolvedOldest.duplicateStatusMap['p1::live1::1'], 'KEEP');
+    assert.equal(resolvedOldest.duplicateStatusMap['p1::dead::0'], 'REMOVE');
+    assert.equal(resolvedOldest.duplicateRemoveCount, 2);
+
+    const resolvedNewest = DuplicateDetector.resolveDuplicateClusters(
+        [lockedOldCopy, playableNewerCopy, playablePopularCopy],
+        { matchCriteria: 'fuzzy', durationTolerance: 2, scope: 'per', keepStrategy: 'newest' }
+    );
+    assert.equal(resolvedNewest.duplicateStatusMap['p1::live2::2'], 'KEEP');
+
+    const resolvedPopular = DuplicateDetector.resolveDuplicateClusters(
+        [lockedOldCopy, playableNewerCopy, playablePopularCopy],
+        { matchCriteria: 'fuzzy', durationTolerance: 2, scope: 'per', keepStrategy: 'popular' }
+    );
+    assert.equal(resolvedPopular.duplicateStatusMap['p1::live2::2'], 'KEEP');
 });
 
 test('Suite 7 — ExcelExporter Builder, Custom Row Mapper, & File Download', () => {
@@ -331,7 +399,7 @@ test('Suite 7 — ExcelExporter Builder, Custom Row Mapper, & File Download', ()
     }
 });
 
-test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', () => {
+test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', async () => {
     const tracks = [
         {
             track: {
@@ -394,12 +462,15 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', (
     assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_edm' }] } }, genreMap), 'electronic');
     assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_rock' }] } }, genreMap), 'rock');
     assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'a_pop' }] } }, genreMap), 'pop');
+    assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'unknown', genres: ['dance pop'] }] } }, genreMap), 'pop');
     assert.equal(classifyGenreBucket({ track: { artists: [{ id: 'unknown' }] } }, genreMap), 'chill');
 
     const splitSample = [
         { _isArabic: true, _releaseYear: 2023, track: { id: '1', name: 'A', artists: [{ id: 'a_arab', name: 'Amr' }] } },
         { _isArabic: false, _releaseYear: 2015, track: { id: '2', name: 'B', artists: [{ id: 'a_rap', name: 'Drake' }] } },
-        { _isArabic: false, _releaseYear: 1995, track: { id: '3', name: 'C', artists: [{ id: 'a_rock', name: 'Oasis' }] } }
+        { _isArabic: false, _releaseYear: 2004, track: { id: '2b', name: 'B2', artists: [{ id: 'a_pop', name: 'Britney' }] } },
+        { _isArabic: false, _releaseYear: 1995, track: { id: '3', name: 'C', artists: [{ id: 'a_rock', name: 'Oasis' }] } },
+        { _isArabic: false, _releaseYear: 1984, track: { id: '4', name: 'D', artists: [{ id: 'a_pop', name: 'MJ' }] } }
     ];
     const genreBuckets = computeSmartSplitBuckets(splitSample, 'genre', genreMap);
     assert.equal(genreBuckets.length, 6);
@@ -409,11 +480,13 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', (
     const decadeBuckets = computeSmartSplitBuckets(splitSample, 'decade', genreMap);
     assert.ok(decadeBuckets.some(b => b.id === 'dec-2020' && b.count === 1));
     assert.ok(decadeBuckets.some(b => b.id === 'dec-2010' && b.count === 1));
+    assert.ok(decadeBuckets.some(b => b.id === 'dec-2000' && b.count === 1));
+    assert.ok(decadeBuckets.some(b => b.id === 'dec-older' && b.count === 1));
 
     const langBuckets = computeSmartSplitBuckets(splitSample, 'language', genreMap);
     assert.equal(langBuckets.length, 2);
     assert.equal(langBuckets[0].count, 1);
-    assert.equal(langBuckets[1].count, 2);
+    assert.equal(langBuckets[1].count, 4);
 
     // Test comparePlaylistTracks (diff, shared, union)
     const listA = [
@@ -499,6 +572,29 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', (
 
     assert.equal(findBestPlayableReplacement(deadItem, [unplayableCandidate]), null);
     assert.equal(findBestPlayableReplacement(null, [isrcCandidate]), null);
+
+    // Test Stage 1 (matchLocalLibraryReplacements) and Stage 2/3 (resolveSpotifyTrackReplacement)
+    const stage1Map = matchLocalLibraryReplacements([deadItem], [{ track: isrcCandidate }]);
+    assert.equal(stage1Map.dead_1.track.id, 'live_isrc');
+    assert.deepEqual(matchLocalLibraryReplacements([], []), {});
+
+    const stage2Resolved = await resolveSpotifyTrackReplacement(deadItem, async (query) => {
+        if (query.startsWith('isrc:')) return [isrcCandidate];
+        return [];
+    });
+    assert.equal(stage2Resolved.track.id, 'live_isrc');
+
+    const stage3FallbackResolved = await resolveSpotifyTrackReplacement(deadItem, async (query) => {
+        if (query.startsWith('isrc:')) throw new Error('ISRC failed');
+        return [fuzzyCandidate];
+    });
+    assert.equal(stage3FallbackResolved.track.id, 'live_fuzzy');
+
+    const failedResolved = await resolveSpotifyTrackReplacement(deadItem, async () => {
+        throw new Error('Search down');
+    });
+    assert.equal(failedResolved, null);
+    assert.equal(await resolveSpotifyTrackReplacement(null, null), null);
 });
 
 test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network Retry, & 401 Auto-Refresh)', async () => {
@@ -628,8 +724,12 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
         const singlePlaylist = await spotifyService.fetchPlaylist('tok', 'p_big');
         assert.equal(singlePlaylist.id, 'pl_meta');
 
-        const pagedPlaylistTracks = await spotifyService.fetchAllTracksForPlaylist('tok', 'p_big');
+        const pageProgress = [];
+        const pagedPlaylistTracks = await spotifyService.fetchAllTracksForPlaylist('tok', 'p_big', null, (done, total) => {
+            pageProgress.push({ done, total });
+        });
         assert.equal(pagedPlaylistTracks.length, 2); // first page + 1 successful remaining batch (offset 200 failed gracefully)
+        assert.ok(pageProgress.length >= 2);
 
         const pagedLikedTracks = await spotifyService.fetchAllTracksForPlaylist('tok', PLAYLIST_IDS.LIKED_SONGS);
         assert.equal(pagedLikedTracks.length, 2);
@@ -644,9 +744,30 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
             }
             return { ok: false, status: 500 };
         };
-        const artistsBatch = await spotifyService.fetchArtistsBatch('tok', ['art1']);
+        const artistProgress = [];
+        const artistsBatch = await spotifyService.fetchArtistsBatch('tok', ['art1'], (done, total) => {
+            artistProgress.push({ done, total });
+        });
         assert.equal(artistsBatch.length, 1);
+        assert.equal(artistProgress.length, 1);
         assert.deepEqual(await spotifyService.fetchArtistsBatch('tok', []), []);
+
+        // Test fetchArtistsBatch error catch path with onProgress
+        const origSetTimeout2 = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout2(fn, 1);
+        try {
+            global.fetch = async () => {
+                throw new Error('Artist network error');
+            };
+            const errArtistProgress = [];
+            const emptyOnErr = await spotifyService.fetchArtistsBatch('tok', ['art_err'], (done, total) => {
+                errArtistProgress.push({ done, total });
+            });
+            assert.deepEqual(emptyOnErr, []);
+            assert.equal(errArtistProgress.length, 1);
+        } finally {
+            global.setTimeout = origSetTimeout2;
+        }
 
         // 5. Test non-OK error throws on fetchPlaylistTracks, fetchSavedTracks, removeTracksFromPlaylist
         global.fetch = async () => ({ ok: false, status: 403, statusText: 'Forbidden' });
@@ -699,7 +820,8 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
         assert.equal(created.id, 'new_pl');
         await spotifyService.addTracksToPlaylist('tok', 'new_pl', ['spotify:track:t1']);
         await spotifyService.addTracksToPlaylist('tok', PLAYLIST_IDS.LIKED_SONGS, ['spotify:track:t_liked']);
-        await spotifyService.replacePlaylistTracks('tok', 'new_pl', ['spotify:track:t1', 'spotify:track:t2']);
+        const manyUris = Array.from({ length: 105 }, (_, i) => `spotify:track:t_${i}`);
+        await spotifyService.replacePlaylistTracks('tok', 'new_pl', manyUris);
 
         // Test searchTracks endpoint
         global.fetch = async (url) => {
@@ -829,6 +951,8 @@ test('Suite 10 — ProviderFactory (Spotify Strategy & Link Parsing)', () => {
 test('Suite 11 — Analysis Module Registry & Client Logger Ring Buffer (including >100 overflow)', () => {
     assert.equal(ANALYSIS_MODULES.length, 5);
     assert.ok(ANALYSIS_MODULE_MAP.cleaner);
+    assert.equal(WORKFLOW_MODULES.length, 5);
+    assert.ok(WORKFLOW_MODULE_MAP.insights);
 
     const logger = createClientLogger('UnitTest');
     logger.debug('Debug log');

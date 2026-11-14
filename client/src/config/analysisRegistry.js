@@ -63,3 +63,44 @@ export const ANALYSIS_MODULE_MAP = ANALYSIS_MODULES.reduce((acc, mod) => {
     acc[mod.id] = mod;
     return acc;
 }, {});
+
+/**
+ * Registry Pattern for Toolkit v2.0 1-Click Workflows (5-Card Obsidian Dock).
+ */
+export const WORKFLOW_MODULES = [
+    {
+        id: 'arabic-playlist',
+        icon: '🌙',
+        title: 'Arabic Extractor',
+        desc: '3-Pass Script, Franco-Arab, Curated Artist & Spotify Genre Detection'
+    },
+    {
+        id: 'duplicates',
+        icon: '🧹',
+        title: 'Clean Duplicates',
+        desc: 'Playable-First Strict & Fuzzy (±0-5s) Duplicate Clustering'
+    },
+    {
+        id: 'compare',
+        icon: '🔀',
+        title: 'Compare & Sync',
+        desc: 'Diff A−B, Shared A∩B & Union A∪B Across Playlists'
+    },
+    {
+        id: 'top50',
+        icon: '🏆',
+        title: 'Top 50 & History',
+        desc: 'Live Spotify 4-Week, 6-Month, All-Time Top 50 & Recently Played'
+    },
+    {
+        id: 'insights',
+        icon: '📊',
+        title: 'Insights & Splitter',
+        desc: 'Smart Genre Family Splitter, Top Artists, Decades & Dead Track Replacer'
+    }
+];
+
+export const WORKFLOW_MODULE_MAP = WORKFLOW_MODULES.reduce((acc, mod) => {
+    acc[mod.id] = mod;
+    return acc;
+}, {});
