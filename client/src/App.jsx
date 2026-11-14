@@ -12,7 +12,8 @@ import {
     calculatePlaylistStats,
     computeSmartSplitBuckets,
     comparePlaylistTracks,
-    isTrackUnplayableOrLocal
+    isTrackUnplayableOrLocal,
+    findBestPlayableReplacement
 } from './services/analysis.utils';
 import { formatDuration, extractReleaseYear } from './utils/formatters';
 import { createClientLogger } from './utils/logger';
@@ -57,14 +58,16 @@ function App() {
 
     const [activeArtistFilter, setActiveArtistFilter] = useState(null);
     const [activeDecadeFilter, setActiveDecadeFilter] = useState(null);
+    const [activeGenreBucketId, setActiveGenreBucketId] = useState(null);
     const [onlyDeadTracksFilter, setOnlyDeadTracksFilter] = useState(false);
     const [trackSearch, setTrackSearch] = useState('');
     const [sortBy, setSortBy] = useState('default');
     const [isSavingSortOrder, setIsSavingSortOrder] = useState(false);
 
-    // Smart Splitter State ('splitter' workflow)
-    const [splitDimension, setSplitDimension] = useState('genre'); // 'genre' | 'decade' | 'language'
-    const [selectedBucketId, setSelectedBucketId] = useState('gen-arabic');
+    // Dead / Locked Track 3-Stage Replacement Engine State
+    const [deadReplacementsMap, setDeadReplacementsMap] = useState({});
+    const [isSearchingReplacements, setIsSearchingReplacements] = useState(false);
+    const [isReplacingDeadTracks, setIsReplacingDeadTracks] = useState(false);
 
     // Compare & Sync State ('compare' workflow)
     const [comparePlaylistA, setComparePlaylistA] = useState(PLAYLIST_IDS.LIKED_SONGS);
@@ -740,6 +743,14 @@ function App() {
 
         dupeClusters.forEach(cluster => {
             const sorted = [...cluster].sort((a, b) => {
+                // Playable-First Rule: If one copy is playable and another copy of the same song
+                // is locked/unplayable, ALWAYS mark the playable copy as KEEP and the locked copy as REMOVE!
+                const deadA = isTrackUnplayableOrLocal(a);
+                const deadB = isTrackUnplayableOrLocal(b);
+                if (deadA !== deadB) {
+                    return deadA ? 1 : -1;
+                }
+
                 if (advancedOptions.keepStrategy === 'popular') {
                     return (b.track?.popularity || 0) - (a.track?.popularity || 0);
                 }
@@ -802,16 +813,47 @@ function App() {
         };
     }, [evaluatedRawTracks, selectedPlaylistIds, advancedOptions, activeWorkflow]);
 
-    // Smart Splitter Buckets (Genre Family, Decade, Language)
-    const splitBuckets = useMemo(
-        () => computeSmartSplitBuckets(scopeTracks, splitDimension, genreCacheRef.current),
+    // Genre Family Splitter Buckets (Integrated inside Insights & Splitter)
+    const genreSplitBuckets = useMemo(
+        () => computeSmartSplitBuckets(scopeTracks, 'genre', genreCacheRef.current),
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [scopeTracks, splitDimension, genreCacheVersion]
+        [scopeTracks, genreCacheVersion]
     );
 
-    const activeSplitBucket = useMemo(
-        () => splitBuckets.find(b => b.id === selectedBucketId) || splitBuckets[0] || null,
-        [splitBuckets, selectedBucketId]
+    const activeGenreBucket = useMemo(
+        () => (activeGenreBucketId ? genreSplitBuckets.find(b => b.id === activeGenreBucketId) || null : null),
+        [genreSplitBuckets, activeGenreBucketId]
+    );
+
+    const activeGenreTrackIdSet = useMemo(() => {
+        if (!activeGenreBucket) return null;
+        return new Set(activeGenreBucket.tracks.map(item => item._selectionKey));
+    }, [activeGenreBucket]);
+
+    // STAGE 1 (0 API Calls): Automatically cross-match any dead/locked tracks against playable tracks in local cache
+    const localDeadReplacementsMap = useMemo(() => {
+        const deadItems = scopeTracks.filter(item => isTrackUnplayableOrLocal(item) && !item.track?.is_local && item.track?.id);
+        if (deadItems.length === 0) return {};
+
+        const cachedLists = Object.values(tracksCacheRef.current);
+        const allItems = cachedLists.length > 0 ? cachedLists.flat() : rawScopeTracks;
+        const playablePool = allItems.filter(item => !isTrackUnplayableOrLocal(item));
+        if (playablePool.length === 0) return {};
+
+        const matched = {};
+        deadItems.forEach(deadItem => {
+            const tid = deadItem.track.id;
+            const found = findBestPlayableReplacement(deadItem, playablePool, 'Library Cache');
+            if (found) {
+                matched[tid] = found;
+            }
+        });
+        return matched;
+    }, [scopeTracks, rawScopeTracks]);
+
+    const effectiveDeadReplacements = useMemo(
+        () => ({ ...localDeadReplacementsMap, ...deadReplacementsMap }),
+        [localDeadReplacementsMap, deadReplacementsMap]
     );
 
     // Compare & Sync Result Tracks
@@ -840,9 +882,7 @@ function App() {
         const q = trackSearch.trim().toLowerCase();
 
         let baseCandidates = scopeTracks;
-        if (activeWorkflow === 'splitter') {
-            baseCandidates = activeSplitBucket ? activeSplitBucket.tracks : [];
-        } else if (activeWorkflow === 'compare') {
+        if (activeWorkflow === 'compare') {
             baseCandidates = compareResultTracks;
         } else if (activeWorkflow === 'top50') {
             baseCandidates = evaluatedTopTracks;
@@ -857,6 +897,9 @@ function App() {
 
             // In Insights workflow when "Unplayable / Local" filter is active
             if (onlyDeadTracksFilter && !isTrackUnplayableOrLocal(item)) return false;
+
+            // Genre Family Splitter filter inside Insights & Splitter
+            if (activeGenreTrackIdSet && !activeGenreTrackIdSet.has(item._selectionKey)) return false;
 
             if (activeArtistFilter) {
                 const matchesArtist = includeCollabs
@@ -898,11 +941,11 @@ function App() {
     }, [
         scopeTracks,
         activeWorkflow,
-        activeSplitBucket,
         compareResultTracks,
         evaluatedTopTracks,
         isArabicWorkflow,
         onlyDeadTracksFilter,
+        activeGenreTrackIdSet,
         activeArtistFilter,
         activeDecadeFilter,
         includeCollabs,
@@ -935,7 +978,11 @@ function App() {
         const generalStats = calculatePlaylistStats(baseList);
         const arabicCount = baseList.filter(i => i._isArabic).length;
         const arabicPct = baseList.length > 0 ? Math.round((arabicCount / baseList.length) * 100) : 0;
-        const deadTracksCount = baseList.filter(isTrackUnplayableOrLocal).length;
+        const deadTracks = baseList.filter(isTrackUnplayableOrLocal);
+        const deadTracksCount = deadTracks.length;
+        const deadReplaceableCount = deadTracks.filter(
+            item => item?.track?.id && Boolean(effectiveDeadReplacements[item.track.id])
+        ).length;
 
         return {
             topArtists,
@@ -943,9 +990,11 @@ function App() {
             generalStats,
             arabicCount,
             arabicPct,
-            deadTracksCount
+            deadTracks,
+            deadTracksCount,
+            deadReplaceableCount
         };
-    }, [scopeTracks, includeCollabs]);
+    }, [scopeTracks, includeCollabs, effectiveDeadReplacements]);
 
     // =========================================================================
     // WORKFLOW & PLAYLIST HANDLERS
@@ -954,6 +1003,7 @@ function App() {
         setActiveWorkflow(workflow);
         setActiveArtistFilter(null);
         setActiveDecadeFilter(null);
+        setActiveGenreBucketId(null);
         setOnlyDeadTracksFilter(false);
         setVisibleLimit(120);
 
@@ -964,26 +1014,176 @@ function App() {
             setNewPlaylistName('🌙 Extracted Arabic Favorites');
         } else if (workflow === 'arabic-playlist') {
             setNewPlaylistName('🌙 Extracted Arabic Playlist');
-        } else if (workflow === 'splitter') {
-            setNewPlaylistName(activeSplitBucket?.playlistTitle || '🧩 Smart Split Playlist');
         } else if (workflow === 'compare') {
             setNewPlaylistName('🔀 Synced & Merged Playlist');
         } else if (workflow === 'top50') {
             setNewPlaylistName('🏆 My Spotify Top 50');
+        } else if (workflow === 'insights') {
+            setNewPlaylistName('📊 Filtered Insights Mix');
         }
     };
 
-    const handleSelectSplitDimension = (dim) => {
-        setSplitDimension(dim);
+    const handleSelectGenreBucket = (bucket) => {
         setVisibleLimit(120);
-        const firstId = dim === 'genre' ? 'gen-arabic' : dim === 'decade' ? 'dec-2020' : 'lang-arabic';
-        setSelectedBucketId(firstId);
+        if (activeGenreBucketId === bucket.id) {
+            setActiveGenreBucketId(null);
+            setNewPlaylistName('📊 Filtered Insights Mix');
+        } else {
+            setActiveGenreBucketId(bucket.id);
+            setNewPlaylistName(bucket.playlistTitle || bucket.name);
+        }
     };
 
-    const handleSelectSplitBucket = (bucket) => {
-        setSelectedBucketId(bucket.id);
-        setNewPlaylistName(bucket.playlistTitle || bucket.name);
-        setVisibleLimit(120);
+    // STAGE 2 & STAGE 3: Search Spotify by ISRC and by Title+Artist+Duration for any unresolved dead tracks
+    const handleFindDeadTrackReplacements = async () => {
+        if (!token || !provider.searchTracks) return;
+        const unresolvedDead = scopeTracks.filter(
+            item =>
+                isTrackUnplayableOrLocal(item) &&
+                !item.track?.is_local &&
+                item.track?.id &&
+                !effectiveDeadReplacements[item.track.id]
+        );
+
+        if (unresolvedDead.length === 0) {
+            const alreadyFound = insightsData.deadReplaceableCount;
+            showToast(
+                alreadyFound > 0
+                    ? `All ${alreadyFound} available replacement(s) are already matched and ready!`
+                    : 'No searchable unavailable Spotify tracks found in this scope.'
+            );
+            return;
+        }
+
+        setIsSearchingReplacements(true);
+        let newlyFoundCount = 0;
+        const discovered = {};
+
+        try {
+            for (const deadItem of unresolvedDead) {
+                const t = deadItem.track;
+                const tid = t.id;
+                let match = null;
+
+                // Stage 2: Exact ISRC master recording lookup
+                const isrc = t.external_ids?.isrc;
+                if (isrc) {
+                    try {
+                        const isrcCandidates = await provider.searchTracks(token, `isrc:${isrc}`, 10);
+                        match = findBestPlayableReplacement(deadItem, isrcCandidates, 'Spotify ISRC');
+                    } catch (err) {
+                        logger.warn(`ISRC lookup failed for ${t.name}`, err);
+                    }
+                }
+
+                // Stage 3: Fuzzy Title + Primary Artist + Duration (±2s) lookup
+                if (!match) {
+                    try {
+                        const cleanTitle = (t.name || '').replace(/[()[\]"']/g, ' ').trim();
+                        const primaryArtist = (t.artists?.[0]?.name || '').replace(/[()[\]"']/g, ' ').trim();
+                        const query = primaryArtist
+                            ? `track:${cleanTitle} artist:${primaryArtist}`
+                            : cleanTitle;
+                        const searchCandidates = await provider.searchTracks(token, query, 10);
+                        match = findBestPlayableReplacement(deadItem, searchCandidates, 'Spotify Search');
+                    } catch (err) {
+                        logger.warn(`Fuzzy search lookup failed for ${t.name}`, err);
+                    }
+                }
+
+                if (match) {
+                    discovered[tid] = match;
+                    newlyFoundCount++;
+                }
+            }
+
+            if (newlyFoundCount > 0) {
+                setDeadReplacementsMap(prev => ({ ...prev, ...discovered }));
+            }
+
+            const totalReady = insightsData.deadReplaceableCount + newlyFoundCount;
+            showToast(
+                totalReady > 0
+                    ? `Found playable replacements for ${totalReady} unavailable track(s)!`
+                    : 'No playable replacements found on Spotify for these delisted tracks.'
+            );
+        } finally {
+            setIsSearchingReplacements(false);
+        }
+    };
+
+    // 1-Click Replace Dead Track(s) with Playable Versions in their Source Playlists
+    const handleReplaceDeadTracks = async (targetDeadItems = null) => {
+        if (!provider.supportsWrite) return;
+        const itemsToReplace = (targetDeadItems || insightsData.deadTracks).filter(
+            item => item?.track?.id && Boolean(effectiveDeadReplacements[item.track.id])
+        );
+        if (itemsToReplace.length === 0) return;
+
+        const targetDeadIdSet = new Set(itemsToReplace.map(item => item.track.id));
+        const rawInstancesToSwap = rawScopeTracks.filter(
+            item => item?.track?.id && targetDeadIdSet.has(item.track.id)
+        );
+        if (rawInstancesToSwap.length === 0) return;
+
+        setIsReplacingDeadTracks(true);
+        try {
+            const byPlaylist = {};
+            rawInstancesToSwap.forEach(item => {
+                const pid = item.sourcePlaylist?.id;
+                const deadUri = item.track?.uri || `spotify:track:${item.track.id}`;
+                const rep = effectiveDeadReplacements[item.track.id];
+                const newTrack = rep?.track;
+                const newUri = newTrack?.uri || (newTrack?.id ? `spotify:track:${newTrack.id}` : null);
+                if (!pid || !deadUri || !newUri) return;
+                if (!byPlaylist[pid]) {
+                    byPlaylist[pid] = { deadUris: new Set(), newUris: new Set(), swapsByDeadId: {} };
+                }
+                byPlaylist[pid].deadUris.add(deadUri);
+                byPlaylist[pid].newUris.add(newUri);
+                byPlaylist[pid].swapsByDeadId[item.track.id] = newTrack;
+            });
+
+            const playlistIds = Object.keys(byPlaylist);
+            for (const pid of playlistIds) {
+                const { deadUris, newUris, swapsByDeadId } = byPlaylist[pid];
+                await provider.removeTracksFromPlaylist(token, pid, Array.from(deadUris));
+                await provider.addTracksToPlaylist(token, pid, Array.from(newUris));
+
+                if (tracksCacheRef.current[pid]) {
+                    tracksCacheRef.current[pid] = tracksCacheRef.current[pid].map((cachedItem, idx) => {
+                        const replacementTrack = swapsByDeadId[cachedItem?.track?.id];
+                        if (!replacementTrack) return cachedItem;
+                        return enrichTrackItem(
+                            { ...cachedItem, track: replacementTrack },
+                            cachedItem.sourcePlaylist,
+                            idx
+                        );
+                    });
+                }
+            }
+
+            setRawScopeTracks(prev =>
+                prev.map((item, idx) => {
+                    const rep = effectiveDeadReplacements[item?.track?.id];
+                    if (!rep?.track || !targetDeadIdSet.has(item.track.id)) return item;
+                    return enrichTrackItem(
+                        { ...item, track: rep.track },
+                        item.sourcePlaylist,
+                        idx
+                    );
+                })
+            );
+
+            showToast(
+                `Replaced ${itemsToReplace.length} locked track(s) with playable versions across ${playlistIds.length} playlist(s)!`
+            );
+        } catch (err) {
+            logger.error('Failed to replace dead tracks', err);
+            showToast(`Could not replace track: ${err.message || 'Check playlist write permissions'}`);
+        } finally {
+            setIsReplacingDeadTracks(false);
+        }
     };
 
     // 1-Click Sync Missing Tracks (A - B) directly into Target Playlist B
@@ -1571,17 +1771,16 @@ function App() {
                     </div>
                 </header>
 
-                {/* 2. 1-CLICK QUICK ACTIONS DOCK (6-Card Workflow Bar) */}
+                {/* 2. 1-CLICK QUICK ACTIONS DOCK (5-Card Workflow Bar) */}
                 <section className="v2-quick-dock">
                     <div className="v2-quick-dock-header">
                         <span className="v2-section-label">⚡ 1-Click Spotify Workflows</span>
                         <span className="brand-text" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
                             {isArabicWorkflow && 'Active: 🌙 Arabic Extractor'}
                             {activeWorkflow === 'duplicates' && 'Active: 🧹 1-Click Duplicate Cleaner'}
-                            {activeWorkflow === 'splitter' && 'Active: 🧩 Smart Playlist Splitter'}
                             {activeWorkflow === 'compare' && 'Active: 🔀 Compare & Sync Playlists'}
                             {activeWorkflow === 'top50' && 'Active: 🏆 Top 50 & Listening History'}
-                            {activeWorkflow === 'insights' && 'Active: 📊 Insights & Dead Track Cleaner'}
+                            {activeWorkflow === 'insights' && 'Active: 📊 Insights, Genre Splitter & Dead Track Cleaner'}
                         </span>
                     </div>
 
@@ -1607,20 +1806,6 @@ function App() {
                             <div style={{ minWidth: 0 }}>
                                 <div className="v2-qa-title">Clean Duplicates</div>
                                 <div className="v2-qa-sub">{duplicateRemoveCount} extra copies found</div>
-                            </div>
-                        </button>
-
-                        <button
-                            onClick={() => activateWorkflow('splitter')}
-                            className={`obsidian-card-interactive v2-qa-card ${activeWorkflow === 'splitter' ? 'brand-active-card' : ''}`}
-                        >
-                            <span className="v2-qa-icon">🧩</span>
-                            <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">
-                                    Smart Splitter
-                                    <span className="v2-new-badge">NEW</span>
-                                </div>
-                                <div className="v2-qa-sub">By Genre, Era &amp; Lang</div>
                             </div>
                         </button>
 
@@ -1658,8 +1843,11 @@ function App() {
                         >
                             <span className="v2-qa-icon">📊</span>
                             <div style={{ minWidth: 0 }}>
-                                <div className="v2-qa-title">Insights &amp; Health</div>
-                                <div className="v2-qa-sub">Charts + Dead Tracks</div>
+                                <div className="v2-qa-title">
+                                    Insights &amp; Splitter
+                                    <span className="v2-new-badge">NEW</span>
+                                </div>
+                                <div className="v2-qa-sub">Genres, Eras &amp; Dead Tracks</div>
                             </div>
                         </button>
                     </div>
@@ -1790,10 +1978,9 @@ function App() {
                                     <h2 className="v2-view-title">
                                         {isArabicWorkflow && `🌙 Arabic Tracks — ${scopeDisplayName}`}
                                         {activeWorkflow === 'duplicates' && `🧹 Duplicate Tracks — ${scopeDisplayName}`}
-                                        {activeWorkflow === 'splitter' && `🧩 Smart Playlist Splitter — ${scopeDisplayName}`}
                                         {activeWorkflow === 'compare' && '🔀 Compare & Sync Playlists'}
                                         {activeWorkflow === 'top50' && '🏆 Personal Top 50 & Recently Played'}
-                                        {activeWorkflow === 'insights' && `📊 Insights & Health — ${scopeDisplayName}`}
+                                        {activeWorkflow === 'insights' && `📊 Insights, Genre Splitter & Health — ${scopeDisplayName}`}
                                     </h2>
                                     <span className="v2-count-badge brand-bg">
                                         {filteredTracks.length} Songs
@@ -1801,15 +1988,13 @@ function App() {
                                 </div>
                                 <p className="v2-view-subtitle">
                                     {activeWorkflow === 'duplicates' &&
-                                        `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`}
-                                    {activeWorkflow === 'splitter' &&
-                                        'Automatically group any playlist or Liked Songs by Spotify Artist Genres, Release Decade, or Language and save as a new playlist in 1 click.'}
+                                        `${advancedOptions.matchCriteria === 'fuzzy' ? `Fuzzy Clustering (±${advancedOptions.durationTolerance}s)` : 'Strict Track ID Matching'} • Playable-First + Keep ${advancedOptions.keepStrategy} • ${advancedOptions.scope === 'cross' ? 'Cross-Playlist' : 'Per-Playlist'}`}
                                     {activeWorkflow === 'compare' &&
                                         'Find missing tracks (A − B), shared tracks (A ∩ B), or merge & deduplicate multiple playlists (A ∪ B).'}
                                     {activeWorkflow === 'top50' &&
                                         'Your real-time Spotify Wrapped across Last 4 Weeks, Last 6 Months, All-Time, and Recently Played.'}
                                     {activeWorkflow === 'insights' &&
-                                        'Interactive artist breakdown, release eras, popularity profile & unplayable/local track cleaner.'}
+                                        'Split by Genre Family, Release Decade, or Artist in 1 click, or find & replace unavailable/locked tracks with playable versions.'}
                                     {isArabicWorkflow &&
                                         (advancedOptions.strictArabicExtraction
                                             ? 'Strict Arabic Mode (Title & Known Artists Only)'
@@ -1825,8 +2010,8 @@ function App() {
                                 >
                                     <span>➕</span>
                                     <span>
-                                        {activeWorkflow === 'splitter' && activeSplitBucket
-                                            ? `Save "${activeSplitBucket.name}" (${selectedTrackItems.length})`
+                                        {activeGenreBucket
+                                            ? `Save "${activeGenreBucket.name}" (${selectedTrackItems.length})`
                                             : `Save as Playlist (${selectedTrackItems.length})`}
                                     </span>
                                 </button>
@@ -1852,71 +2037,6 @@ function App() {
                                 )}
                             </div>
                         </div>
-
-                        {/* =========================================================
-                            NEW WORKFLOW PANEL 1: SMART PLAYLIST SPLITTER
-                            ========================================================= */}
-                        {activeWorkflow === 'splitter' && (
-                            <div className="obsidian-card v2-feature-panel">
-                                <div className="v2-feature-top-row">
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#d4d4d8' }}>Split Dimension:</span>
-                                        <div className="v2-seg-group">
-                                            <button
-                                                type="button"
-                                                onClick={() => handleSelectSplitDimension('genre')}
-                                                className={`v2-seg-btn ${splitDimension === 'genre' ? 'active' : ''}`}
-                                            >
-                                                🎸 By Genre Family
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleSelectSplitDimension('decade')}
-                                                className={`v2-seg-btn ${splitDimension === 'decade' ? 'active' : ''}`}
-                                            >
-                                                📅 By Release Decade
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleSelectSplitDimension('language')}
-                                                className={`v2-seg-btn ${splitDimension === 'language' ? 'active' : ''}`}
-                                            >
-                                                🌍 Arabic vs. International
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                        Click any bucket below to filter tracks &amp; save as a dedicated Spotify playlist
-                                    </span>
-                                </div>
-
-                                <div className="v2-splitter-buckets">
-                                    {splitBuckets.map(bucket => {
-                                        const isActive = activeSplitBucket?.id === bucket.id;
-                                        return (
-                                            <button
-                                                type="button"
-                                                key={bucket.id}
-                                                onClick={() => handleSelectSplitBucket(bucket)}
-                                                className={`v2-bucket-card ${isActive ? 'active' : ''}`}
-                                            >
-                                                <div className="v2-bucket-top">
-                                                    <span className="v2-bucket-name">{bucket.name}</span>
-                                                    <span className="v2-bucket-pct">{bucket.pct}%</span>
-                                                </div>
-                                                <div className="v2-bucket-count">
-                                                    {bucket.count.toLocaleString()}{' '}
-                                                    <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-secondary)' }}>tracks</span>
-                                                </div>
-                                                <div className="v2-bucket-bar">
-                                                    <div className="v2-bucket-bar-fill" style={{ width: `${Math.max(4, bucket.pct)}%` }} />
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
 
                         {/* =========================================================
                             NEW WORKFLOW PANEL 2: COMPARE & SYNC PLAYLISTS
@@ -2335,6 +2455,15 @@ function App() {
                                     className="v2-input"
                                 />
 
+                                {activeGenreBucket && (
+                                    <button
+                                        onClick={() => setActiveGenreBucketId(null)}
+                                        className="v2-chip v2-chip-filter-active"
+                                    >
+                                        🎸 {activeGenreBucket.name} ✕
+                                    </button>
+                                )}
+
                                 {activeArtistFilter && (
                                     <button
                                         onClick={() => setActiveArtistFilter(null)}
@@ -2360,6 +2489,42 @@ function App() {
                                     >
                                         👻 Unplayable / Local Only ✕
                                     </button>
+                                )}
+
+                                {onlyDeadTracksFilter && insightsData.deadTracksCount > 0 && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={handleFindDeadTrackReplacements}
+                                            disabled={isSearchingReplacements}
+                                            className="v2-btn-secondary"
+                                            title="Search Spotify by ISRC and Title + Artist + Duration (±2s) for playable re-uploads"
+                                        >
+                                            <span>🔍</span>
+                                            <span>
+                                                {isSearchingReplacements
+                                                    ? 'Searching Spotify...'
+                                                    : 'Find Replacements on Spotify'}
+                                            </span>
+                                        </button>
+
+                                        {insightsData.deadReplaceableCount > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleReplaceDeadTracks()}
+                                                disabled={isReplacingDeadTracks}
+                                                className="v2-btn-primary brand-bg"
+                                                title="Replace all matched dead tracks with playable versions in their source playlists"
+                                            >
+                                                <span>🔄</span>
+                                                <span>
+                                                    {isReplacingDeadTracks
+                                                        ? 'Replacing...'
+                                                        : `Replace All Found (${insightsData.deadReplaceableCount})`}
+                                                </span>
+                                            </button>
+                                        )}
+                                    </>
                                 )}
 
                                 <select
@@ -2402,7 +2567,7 @@ function App() {
                             </div>
                         </div>
 
-                        {/* INTERACTIVE INSIGHTS & LIBRARY HEALTH DRAWER (Visible in Insights Workflow) */}
+                        {/* INTERACTIVE INSIGHTS, GENRE SPLITTER & LIBRARY HEALTH DRAWER */}
                         {activeWorkflow === 'insights' && (
                             <div className="v2-insights-panel">
                                 <div className="v2-kpi-grid">
@@ -2440,29 +2605,99 @@ function App() {
                                         </div>
                                     </div>
 
-                                    {/* NEW FEATURE: Unplayable / Local Track Cleaner Card */}
+                                    {/* Unplayable / Locked Track Cleaner & 3-Stage Replacement Engine Card */}
                                     <div className={`obsidian-card v2-kpi-card ${insightsData.deadTracksCount > 0 ? 'v2-kpi-card-danger' : ''}`}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                             <span style={{ fontSize: '0.72rem', color: insightsData.deadTracksCount > 0 ? '#fca5a5' : 'var(--text-secondary)', fontWeight: 700 }}>
-                                                👻 Unplayable / Local
+                                                👻 Unplayable / Locked
                                             </span>
                                             <span style={{ fontSize: '0.7rem', fontWeight: 800, color: insightsData.deadTracksCount > 0 ? '#f87171' : '#4ade80' }}>
                                                 {insightsData.deadTracksCount} found
                                             </span>
                                         </div>
                                         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                                            Delisted, region-locked &amp; local files
+                                            {insightsData.deadReplaceableCount > 0
+                                                ? `✅ ${insightsData.deadReplaceableCount} playable replacement(s) ready!`
+                                                : 'Delisted, region-locked & local files'}
                                         </div>
                                         {insightsData.deadTracksCount > 0 && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setOnlyDeadTracksFilter(prev => !prev)}
-                                                className="v2-btn-secondary"
-                                                style={{ marginTop: '0.35rem', width: '100%', justifyContent: 'center', padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
-                                            >
-                                                {onlyDeadTracksFilter ? 'Show All Tracks' : `Filter & Clean (${insightsData.deadTracksCount})`}
-                                            </button>
+                                            <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const nextState = !onlyDeadTracksFilter;
+                                                        setOnlyDeadTracksFilter(nextState);
+                                                        if (nextState) {
+                                                            handleFindDeadTrackReplacements();
+                                                        }
+                                                    }}
+                                                    className="v2-btn-secondary"
+                                                    style={{ flex: 1, justifyContent: 'center', padding: '0.25rem 0.45rem', fontSize: '0.68rem' }}
+                                                >
+                                                    {onlyDeadTracksFilter ? 'Show All' : `Filter & Find (${insightsData.deadTracksCount})`}
+                                                </button>
+                                                {insightsData.deadReplaceableCount > 0 ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleReplaceDeadTracks()}
+                                                        disabled={isReplacingDeadTracks}
+                                                        className="v2-btn-primary brand-bg"
+                                                        style={{ flex: 1, justifyContent: 'center', padding: '0.25rem 0.45rem', fontSize: '0.68rem' }}
+                                                    >
+                                                        {isReplacingDeadTracks
+                                                            ? 'Replacing...'
+                                                            : `🔄 Replace (${insightsData.deadReplaceableCount})`}
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleFindDeadTrackReplacements}
+                                                        disabled={isSearchingReplacements}
+                                                        className="v2-btn-secondary"
+                                                        style={{ flex: 1, justifyContent: 'center', padding: '0.25rem 0.45rem', fontSize: '0.68rem' }}
+                                                    >
+                                                        {isSearchingReplacements ? 'Searching...' : '🔍 Search Spotify'}
+                                                    </button>
+                                                )}
+                                            </div>
                                         )}
+                                    </div>
+                                </div>
+
+                                {/* INTEGRATED SMART GENRE FAMILY SPLITTER */}
+                                <div className="obsidian-card v2-chart-card">
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        <span className="v2-section-label">🎸 Smart Genre Family Splitter (Click to Filter &amp; Save as Playlist)</span>
+                                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                                            {activeGenreBucket
+                                                ? `Filtering by ${activeGenreBucket.name} (${activeGenreBucket.count} tracks) — Click again to show all`
+                                                : 'Select any genre bucket to isolate tracks & create a new playlist'}
+                                        </span>
+                                    </div>
+                                    <div className="v2-splitter-buckets">
+                                        {genreSplitBuckets.map(bucket => {
+                                            const isActive = activeGenreBucketId === bucket.id;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={bucket.id}
+                                                    onClick={() => handleSelectGenreBucket(bucket)}
+                                                    className={`v2-bucket-card ${isActive ? 'active' : ''}`}
+                                                >
+                                                    <div className="v2-bucket-top">
+                                                        <span className="v2-bucket-name">{bucket.name}</span>
+                                                        <span className="v2-bucket-pct">{bucket.pct}%</span>
+                                                    </div>
+                                                    <div className="v2-bucket-count">
+                                                        {bucket.count.toLocaleString()}{' '}
+                                                        <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-secondary)' }}>tracks</span>
+                                                    </div>
+                                                    <div className="v2-bucket-bar">
+                                                        <div className="v2-bucket-bar-fill" style={{ width: `${Math.max(4, bucket.pct)}%` }} />
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
 
@@ -2577,6 +2812,8 @@ function App() {
                                         const dupeStatus = activeWorkflow === 'duplicates'
                                             ? duplicateStatusMap[item._selectionKey]
                                             : null;
+                                        const isDeadTrack = isTrackUnplayableOrLocal(item);
+                                        const deadReplacement = isDeadTrack && t.id ? effectiveDeadReplacements[t.id] : null;
                                         const thumbUrl = t.album?.images?.[t.album.images.length - 1]?.url || t.album?.images?.[0]?.url;
                                         const artistNames = t.artists?.map(a => a.name).join(', ') || 'Unknown Artist';
                                         const releaseYear = item._releaseYear || '';
@@ -2591,6 +2828,8 @@ function App() {
                                             ? `Found in ${sourcePlaylistsList.length} playlists: ${sourcePlaylistsList.join(' • ')}`
                                             : (sourcePlaylistsList[0] ? `Playlist: ${sourcePlaylistsList[0]}` : '');
                                         const isPlayingPreview = previewTrack?.id === t.id;
+                                        const isPlayingReplacementPreview =
+                                            Boolean(deadReplacement?.track?.id) && previewTrack?.id === deadReplacement.track.id;
 
                                         return (
                                             <div
@@ -2632,6 +2871,19 @@ function App() {
                                                             <span className="v2-track-title">{t.name}</span>
                                                             {dupeStatus === 'KEEP' && <span className="v2-badge-keep">KEEP</span>}
                                                             {dupeStatus === 'REMOVE' && <span className="v2-badge-remove">REMOVE</span>}
+                                                            {isDeadTrack && (
+                                                                <span className="v2-badge-remove" title="This track is unplayable, region-locked, or a local file">
+                                                                    {t.is_local ? '📁 Local File' : '🔒 Unavailable'}
+                                                                </span>
+                                                            )}
+                                                            {deadReplacement && (
+                                                                <span
+                                                                    className="v2-badge-keep"
+                                                                    title={`Playable replacement found: ${deadReplacement.track.name} (${deadReplacement.matchReason})`}
+                                                                >
+                                                                    🔄 {deadReplacement.matchReason} (🔥 {deadReplacement.track.popularity ?? 0}%)
+                                                                </span>
+                                                            )}
                                                             {item._arabicReason && (
                                                                 <span className="v2-badge-reason brand-pill">{item._arabicReason}</span>
                                                             )}
@@ -2670,6 +2922,44 @@ function App() {
                                                 </div>
 
                                                 <div className="v2-track-right">
+                                                    {deadReplacement && (
+                                                        <div
+                                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                                            onClick={e => e.stopPropagation()}
+                                                        >
+                                                            {deadReplacement.track?.id && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() =>
+                                                                        setPreviewTrack(
+                                                                            isPlayingReplacementPreview
+                                                                                ? null
+                                                                                : {
+                                                                                    id: deadReplacement.track.id,
+                                                                                    name: deadReplacement.track.name,
+                                                                                    artist: artistNames
+                                                                                }
+                                                                        )
+                                                                    }
+                                                                    className="v2-btn-secondary"
+                                                                    style={{ padding: '0.2rem 0.48rem', fontSize: '0.68rem' }}
+                                                                    title="Preview playable replacement track in the mini-player"
+                                                                >
+                                                                    {isPlayingReplacementPreview ? '♫ Playing' : '▶ Test New'}
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleReplaceDeadTracks([item])}
+                                                                disabled={isReplacingDeadTracks}
+                                                                className="v2-btn-primary brand-bg"
+                                                                style={{ padding: '0.2rem 0.55rem', fontSize: '0.68rem' }}
+                                                                title="Replace this locked track with the playable version in its playlist"
+                                                            >
+                                                                ⚡ Replace
+                                                            </button>
+                                                        </div>
+                                                    )}
                                                     {typeof t.popularity === 'number' && (
                                                         <span className="v2-track-pop" title="Popularity">
                                                             🔥 {t.popularity}%
@@ -2746,13 +3036,6 @@ function App() {
                     >
                         <span style={{ fontSize: '1rem' }}>🧹</span>
                         <span>Dupes</span>
-                    </button>
-                    <button
-                        onClick={() => activateWorkflow('splitter')}
-                        className={`v2-mnav-btn ${activeWorkflow === 'splitter' ? 'active' : ''}`}
-                    >
-                        <span style={{ fontSize: '1rem' }}>🧩</span>
-                        <span>Splitter</span>
                     </button>
                     <button
                         onClick={() => activateWorkflow('compare')}

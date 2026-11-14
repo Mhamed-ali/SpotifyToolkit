@@ -28,6 +28,7 @@ const spotifyProvider = {
     createPlaylist: spotifyService.createPlaylist,
     addTracksToPlaylist: spotifyService.addTracksToPlaylist,
     replacePlaylistTracks: spotifyService.replacePlaylistTracks,
+    searchTracks: spotifyService.searchTracks,
     fetchTopTracks: spotifyService.fetchTopTracks,
     fetchTopArtists: spotifyService.fetchTopArtists,
     fetchRecentlyPlayed: spotifyService.fetchRecentlyPlayed,

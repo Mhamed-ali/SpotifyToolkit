@@ -23,7 +23,8 @@ import {
     isTrackUnplayableOrLocal,
     classifyGenreBucket,
     computeSmartSplitBuckets,
-    comparePlaylistTracks
+    comparePlaylistTracks,
+    findBestPlayableReplacement
 } from '../src/services/analysis.utils.js';
 import * as spotifyService from '../src/services/spotify.service.js';
 import { ANALYSIS_MODULES, ANALYSIS_MODULE_MAP } from '../src/config/analysisRegistry.js';
@@ -426,6 +427,78 @@ test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', (
     assert.equal(comparePlaylistTracks(listA, listB, 'diff').length, 1);
     assert.equal(comparePlaylistTracks(listA, listB, 'shared').length, 1);
     assert.equal(comparePlaylistTracks(listA, listB, 'union').length, 3);
+
+    // Test findBestPlayableReplacement (3-tier ISRC, Title+PrimaryArtist+Duration ±3s, SharedArtist ±5s)
+    const deadItem = {
+        track: {
+            id: 'dead_1',
+            uri: 'spotify:track:dead_1',
+            name: 'Roma - Remastered',
+            duration_ms: 244000,
+            is_playable: false,
+            artists: [{ id: 'a1', name: 'Cairokee' }, { id: 'a2', name: 'Marwan Pablo' }],
+            external_ids: { isrc: 'EG1234567890' }
+        }
+    };
+    const isrcCandidate = {
+        id: 'live_isrc',
+        uri: 'spotify:track:live_isrc',
+        name: 'Roma',
+        duration_ms: 244100,
+        popularity: 80,
+        available_markets: ['EG', 'US'],
+        artists: [{ id: 'a1', name: 'Cairokee' }],
+        external_ids: { isrc: 'EG1234567890' }
+    };
+    const fuzzyCandidate = {
+        id: 'live_fuzzy',
+        uri: 'spotify:track:live_fuzzy',
+        name: 'Roma',
+        duration_ms: 245500,
+        popularity: 75,
+        available_markets: ['EG'],
+        artists: [{ id: 'a1', name: 'Cairokee' }],
+        external_ids: { isrc: 'EG9999999999' }
+    };
+    const sharedArtistCandidate = {
+        id: 'live_shared',
+        uri: 'spotify:track:live_shared',
+        name: 'Roma',
+        duration_ms: 248000,
+        popularity: 65,
+        available_markets: ['EG'],
+        artists: [{ id: 'a2', name: 'Marwan Pablo' }]
+    };
+    const unplayableCandidate = {
+        id: 'still_dead',
+        uri: 'spotify:track:still_dead',
+        name: 'Roma',
+        duration_ms: 244000,
+        is_playable: false,
+        artists: [{ id: 'a1', name: 'Cairokee' }],
+        external_ids: { isrc: 'EG1234567890' }
+    };
+
+    const tier3Match = findBestPlayableReplacement(deadItem, [unplayableCandidate, fuzzyCandidate, isrcCandidate]);
+    assert.ok(tier3Match);
+    assert.equal(tier3Match.track.id, 'live_isrc');
+    assert.equal(tier3Match.tier, 3);
+    assert.match(tier3Match.matchReason, /ISRC/);
+
+    const tier2Match = findBestPlayableReplacement(deadItem, [unplayableCandidate, sharedArtistCandidate, fuzzyCandidate]);
+    assert.ok(tier2Match);
+    assert.equal(tier2Match.track.id, 'live_fuzzy');
+    assert.equal(tier2Match.tier, 2);
+    assert.match(tier2Match.matchReason, /Exact Title, Artist & Duration/);
+
+    const tier1Match = findBestPlayableReplacement(deadItem, [unplayableCandidate, sharedArtistCandidate]);
+    assert.ok(tier1Match);
+    assert.equal(tier1Match.track.id, 'live_shared');
+    assert.equal(tier1Match.tier, 1);
+    assert.match(tier1Match.matchReason, /Title & Artist Match/);
+
+    assert.equal(findBestPlayableReplacement(deadItem, [unplayableCandidate]), null);
+    assert.equal(findBestPlayableReplacement(null, [isrcCandidate]), null);
 });
 
 test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network Retry, & 401 Auto-Refresh)', async () => {
@@ -625,7 +698,24 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
         const created = await spotifyService.createPlaylist('tok', 'u1', 'New', 'Desc');
         assert.equal(created.id, 'new_pl');
         await spotifyService.addTracksToPlaylist('tok', 'new_pl', ['spotify:track:t1']);
+        await spotifyService.addTracksToPlaylist('tok', PLAYLIST_IDS.LIKED_SONGS, ['spotify:track:t_liked']);
         await spotifyService.replacePlaylistTracks('tok', 'new_pl', ['spotify:track:t1', 'spotify:track:t2']);
+
+        // Test searchTracks endpoint
+        global.fetch = async (url) => {
+            if (url.includes('/v1/search?type=track')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ tracks: { items: [{ id: 'found1', uri: 'spotify:track:found1', name: 'Roma' }] } })
+                };
+            }
+            return { ok: false, status: 500 };
+        };
+        const searchResults = await spotifyService.searchTracks('tok', 'isrc:EG12345', 5);
+        assert.equal(searchResults.length, 1);
+        assert.equal(searchResults[0].id, 'found1');
+        assert.deepEqual(await spotifyService.searchTracks('tok', ''), []);
 
         // Test Top Tracks, Top Artists, and Recently Played endpoints
         global.fetch = async (url) => {

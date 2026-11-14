@@ -310,24 +310,55 @@ export const createPlaylist = async (token, userId, name, description, isPublic 
 };
 
 export const addTracksToPlaylist = async (token, playlistId, trackUris) => {
-    const batchSize = 100;
+    const isLiked = playlistId === PLAYLIST_IDS.LIKED_SONGS;
+    const batchSize = isLiked ? 50 : 100;
     const batches = [];
     for (let i = 0; i < trackUris.length; i += batchSize) {
         batches.push(trackUris.slice(i, i + batchSize));
     }
 
     for (const batch of batches) {
-        const result = await fetchWithRetry(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
-            method: "POST",
+        let url;
+        let method;
+        let body;
+
+        if (isLiked) {
+            const ids = batch.map(uri => uri.replace('spotify:track:', ''));
+            url = "https://api.spotify.com/v1/me/tracks";
+            method = "PUT";
+            body = { ids };
+        } else {
+            url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`;
+            method = "POST";
+            body = { uris: batch };
+        }
+
+        const result = await fetchWithRetry(url, {
+            method,
             headers: {
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({ uris: batch })
+            body: JSON.stringify(body)
         });
         if (!result.ok) throw { status: result.status, message: result.statusText };
     }
     return true;
+};
+
+/**
+ * Searches Spotify catalog for playable tracks matching the given query (ISRC or title/artist).
+ * Uses market=from_token so Spotify returns playability for the authenticated user's region.
+ */
+export const searchTracks = async (token, query, limit = 10) => {
+    if (!query || !String(query).trim()) return [];
+    const res = await fetchWithRetry(
+        `https://api.spotify.com/v1/search?type=track&market=from_token&limit=${limit}&q=${encodeURIComponent(String(query).trim())}`,
+        { method: "GET", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw { status: res.status, message: res.statusText };
+    const data = await res.json();
+    return data?.tracks?.items || [];
 };
 
 /**

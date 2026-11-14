@@ -158,6 +158,102 @@ export const isTrackUnplayableOrLocal = (item) => {
     return false;
 };
 
+const normalizeReplacementText = (str = '') =>
+    String(str).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+const normalizeReplacementTitle = (str = '') =>
+    String(str)
+        .toLowerCase()
+        .replace(/\s*\((?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^)]*\)/gi, '')
+        .replace(/\s*\[(?:feat\.?|ft\.?|with|remaster(?:ed)?|live|radio edit|single version|album version|bonus track)[^\]]*\]/gi, '')
+        .replace(/\s*-\s*(?:remaster(?:ed)?(?:\s+\d{4})?|radio edit|single version|album version|original mix).*$/gi, '')
+        .replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * 3-Tier Replacement Matcher for Unavailable / Locked Tracks:
+ * Given a dead/locked track item and a pool of candidate tracks (either library `{ track }` items
+ * from Stage 1 or raw Spotify track objects from Stage 2 ISRC / Stage 3 Fuzzy Search),
+ * returns the highest-confidence playable replacement track.
+ */
+export const findBestPlayableReplacement = (deadItem, candidates = [], defaultSourceLabel = 'Spotify Search') => {
+    const deadTrack = deadItem?.track || deadItem;
+    if (!deadTrack || !deadTrack.name) return null;
+
+    const deadId = deadTrack.id || '';
+    const deadUri = deadTrack.uri || '';
+    const deadIsrc = deadTrack.external_ids?.isrc || null;
+    const deadNormTitle = normalizeReplacementTitle(deadTrack.name);
+    const deadPrimaryArtist = normalizeReplacementText(deadTrack.artists?.[0]?.name || '');
+    const deadAllArtists = new Set(
+        (deadTrack.artists || []).map(a => normalizeReplacementText(a?.name || '')).filter(Boolean)
+    );
+    const deadDuration = Number(deadTrack.duration_ms) || 0;
+
+    if (!deadNormTitle) return null;
+
+    let bestMatch = null;
+
+    for (const rawCand of candidates) {
+        const candTrack = rawCand?.track || rawCand;
+        if (!candTrack || !candTrack.id || !candTrack.uri) continue;
+        if (candTrack.id === deadId || candTrack.uri === deadUri) continue;
+        if (isTrackUnplayableOrLocal({ track: candTrack })) continue;
+
+        const candIsrc = candTrack.external_ids?.isrc || null;
+        const candNormTitle = normalizeReplacementTitle(candTrack.name);
+        const candPrimaryArtist = normalizeReplacementText(candTrack.artists?.[0]?.name || '');
+        const candAllArtists = (candTrack.artists || [])
+            .map(a => normalizeReplacementText(a?.name || ''))
+            .filter(Boolean);
+        const candDuration = Number(candTrack.duration_ms) || 0;
+        const durationDiff = (deadDuration > 0 && candDuration > 0)
+            ? Math.abs(candDuration - deadDuration)
+            : 0;
+
+        let tier = 0;
+        let matchReason = defaultSourceLabel;
+
+        // Tier 3: Exact ISRC studio master match
+        if (deadIsrc && candIsrc && deadIsrc === candIsrc) {
+            tier = 3;
+            matchReason = defaultSourceLabel === 'Library Cache'
+                ? 'Playable in Library (ISRC)'
+                : 'Exact ISRC Master Match';
+        } else if (candNormTitle === deadNormTitle) {
+            const primaryMatches = deadPrimaryArtist && candPrimaryArtist === deadPrimaryArtist;
+            const sharedArtist = candAllArtists.some(a => deadAllArtists.has(a));
+
+            if (primaryMatches && durationDiff <= 3000) {
+                tier = 2;
+                matchReason = defaultSourceLabel === 'Library Cache'
+                    ? 'Playable Copy in Your Library'
+                    : 'Exact Title, Artist & Duration (±2s)';
+            } else if ((primaryMatches || sharedArtist) && durationDiff <= 5000) {
+                tier = 1;
+                matchReason = defaultSourceLabel === 'Library Cache'
+                    ? 'Playable Copy in Your Library'
+                    : 'Title & Artist Match (±5s)';
+            }
+        }
+
+        if (tier > 0) {
+            const pop = Number(candTrack.popularity) || 0;
+            const score = tier * 1000 + pop - Math.round(durationDiff / 100);
+            if (!bestMatch || score > bestMatch.score) {
+                bestMatch = {
+                    track: candTrack,
+                    matchReason,
+                    tier,
+                    score,
+                    durationDiffMs: durationDiff
+                };
+            }
+        }
+    }
+
+    return bestMatch;
+};
+
 /**
  * Classifies a track into one of 6 Smart Splitter Genre Family buckets using real Spotify Artist Genres
  * and Arabic detection metadata.
