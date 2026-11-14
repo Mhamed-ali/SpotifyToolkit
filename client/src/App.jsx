@@ -759,15 +759,21 @@ function App() {
             const tid = item.track?.id;
             if (!tid) return;
             const plName = item.sourcePlaylist?.name || 'Playlist';
+            const canEditSource = PlaylistModel.canEdit(item.sourcePlaylist, profile?.id, provider.supportsWrite);
             if (!byTrackId.has(tid)) {
                 byTrackId.set(tid, {
                     ...item,
-                    sourcePlaylists: [plName]
+                    sourcePlaylists: [plName],
+                    _hasEditableSource: canEditSource
                 });
             } else {
                 const existing = byTrackId.get(tid);
                 if (!existing.sourcePlaylists.includes(plName)) {
                     existing.sourcePlaylists.push(plName);
+                }
+                if (canEditSource && !existing._hasEditableSource) {
+                    existing._hasEditableSource = true;
+                    existing.sourcePlaylist = item.sourcePlaylist;
                 }
             }
         });
@@ -777,7 +783,7 @@ function App() {
             duplicateStatusMap: statusMap,
             duplicateRemoveCount: removeCount
         };
-    }, [evaluatedRawTracks, selectedPlaylistIds, advancedOptions, activeWorkflow]);
+    }, [evaluatedRawTracks, selectedPlaylistIds, advancedOptions, activeWorkflow, profile?.id, provider.supportsWrite]);
 
     // Genre Family Splitter Buckets (Integrated inside Insights & Splitter)
     const genreSplitBuckets = useMemo(
@@ -1055,6 +1061,9 @@ function App() {
         setIsReplacingDeadTracks(true);
         try {
             const byPlaylist = {};
+            const readOnlyFallbackUris = new Set();
+            const allSwapsByDeadId = {};
+
             rawInstancesToSwap.forEach(item => {
                 const pid = item.sourcePlaylist?.id;
                 const deadUri = item.track?.uri || `spotify:track:${item.track.id}`;
@@ -1062,32 +1071,100 @@ function App() {
                 const newTrack = rep?.track;
                 const newUri = newTrack?.uri || (newTrack?.id ? `spotify:track:${newTrack.id}` : null);
                 if (!pid || !deadUri || !newUri) return;
-                if (!byPlaylist[pid]) {
-                    byPlaylist[pid] = { deadUris: new Set(), newUris: new Set(), swapsByDeadId: {} };
+
+                allSwapsByDeadId[item.track.id] = newTrack;
+
+                // Only attempt in-place playlist modification if the user owns/can edit the playlist
+                // (e.g. skip third-party followed playlists like Lofi Girl, and save to Liked Songs instead)
+                const isEditable =
+                    !profile?.id || PlaylistModel.canEdit(item.sourcePlaylist, profile.id, provider.supportsWrite);
+
+                if (isEditable) {
+                    if (!byPlaylist[pid]) {
+                        byPlaylist[pid] = { deadUris: new Set(), newUris: new Set(), swapsByDeadId: {} };
+                    }
+                    byPlaylist[pid].deadUris.add(deadUri);
+                    byPlaylist[pid].newUris.add(newUri);
+                    byPlaylist[pid].swapsByDeadId[item.track.id] = newTrack;
+                } else {
+                    readOnlyFallbackUris.add(newUri);
                 }
-                byPlaylist[pid].deadUris.add(deadUri);
-                byPlaylist[pid].newUris.add(newUri);
-                byPlaylist[pid].swapsByDeadId[item.track.id] = newTrack;
             });
 
             const playlistIds = Object.keys(byPlaylist);
+            let succeededPlaylists = 0;
+            let likedNeedsScope = false;
+
             for (const pid of playlistIds) {
                 const { deadUris, newUris, swapsByDeadId } = byPlaylist[pid];
-                await provider.removeTracksFromPlaylist(token, pid, Array.from(deadUris));
-                await provider.addTracksToPlaylist(token, pid, Array.from(newUris));
+                try {
+                    await provider.addTracksToPlaylist(token, pid, Array.from(newUris));
+                    await provider.removeTracksFromPlaylist(token, pid, Array.from(deadUris));
+                    succeededPlaylists++;
 
-                if (tracksCacheRef.current[pid]) {
-                    tracksCacheRef.current[pid] = tracksCacheRef.current[pid].map((cachedItem, idx) => {
-                        const replacementTrack = swapsByDeadId[cachedItem?.track?.id];
-                        if (!replacementTrack) return cachedItem;
-                        return enrichTrackItem(
-                            { ...cachedItem, track: replacementTrack },
-                            cachedItem.sourcePlaylist,
-                            idx
-                        );
-                    });
+                    if (tracksCacheRef.current[pid]) {
+                        tracksCacheRef.current[pid] = tracksCacheRef.current[pid].map((cachedItem, idx) => {
+                            const replacementTrack = swapsByDeadId[cachedItem?.track?.id];
+                            if (!replacementTrack) return cachedItem;
+                            return enrichTrackItem(
+                                { ...cachedItem, track: replacementTrack },
+                                cachedItem.sourcePlaylist,
+                                idx
+                            );
+                        });
+                    }
+                } catch (plErr) {
+                    logger.warn(`Skipping dead-track swap on playlist ${pid}`, plErr);
+                    if (pid === PLAYLIST_IDS.LIKED_SONGS && (plErr?.status === 403 || plErr?.status === 401)) {
+                        likedNeedsScope = true;
+                    }
                 }
             }
+
+            // If any dead tracks only existed inside a read-only third-party playlist (e.g. Lofi Girl),
+            // save their playable replacements into Liked Songs so the user still gets the working songs!
+            if (readOnlyFallbackUris.size > 0 && !likedNeedsScope) {
+                try {
+                    await provider.addTracksToPlaylist(
+                        token,
+                        PLAYLIST_IDS.LIKED_SONGS,
+                        Array.from(readOnlyFallbackUris)
+                    );
+                    succeededPlaylists++;
+                } catch (fallbackErr) {
+                    logger.warn('Could not save read-only playlist replacements to Liked Songs', fallbackErr);
+                    if (fallbackErr?.status === 403 || fallbackErr?.status === 401) {
+                        likedNeedsScope = true;
+                    }
+                }
+            }
+
+            if (succeededPlaylists === 0) {
+                if (likedNeedsScope) {
+                    showToast(
+                        'Please click Log Out and Continue with Spotify once to approve Liked Songs write permission!'
+                    );
+                } else {
+                    showToast(
+                        'Cannot modify read-only playlists owned by other Spotify users (e.g. Lofi Girl).'
+                    );
+                }
+                return;
+            }
+
+            // Update in-memory caches and rawScopeTracks for all replaced tracks
+            Object.keys(tracksCacheRef.current).forEach(pid => {
+                if (!tracksCacheRef.current[pid]) return;
+                tracksCacheRef.current[pid] = tracksCacheRef.current[pid].map((cachedItem, idx) => {
+                    const replacementTrack = allSwapsByDeadId[cachedItem?.track?.id];
+                    if (!replacementTrack) return cachedItem;
+                    return enrichTrackItem(
+                        { ...cachedItem, track: replacementTrack },
+                        cachedItem.sourcePlaylist,
+                        idx
+                    );
+                });
+            });
 
             setRawScopeTracks(prev =>
                 prev.map((item, idx) => {
@@ -1102,7 +1179,7 @@ function App() {
             );
 
             showToast(
-                `Replaced ${itemsToReplace.length} locked track(s) with playable versions across ${playlistIds.length} playlist(s)!`
+                `Replaced ${itemsToReplace.length} locked track(s) with playable versions across ${succeededPlaylists} playlist(s)!`
             );
         } catch (err) {
             logger.error('Failed to replace dead tracks', err);
@@ -1343,11 +1420,19 @@ function App() {
                 const pid = item.sourcePlaylist?.id;
                 const uri = DuplicateDetector.extractUriFromKey(item._selectionKey) || item.track?.uri;
                 if (!pid || !uri) return;
+                const isEditable =
+                    !profile?.id || PlaylistModel.canEdit(item.sourcePlaylist, profile.id, provider.supportsWrite);
+                if (!isEditable) return;
                 if (!byPlaylist[pid]) byPlaylist[pid] = [];
                 byPlaylist[pid].push(uri);
             });
 
             const playlistIds = Object.keys(byPlaylist);
+            if (playlistIds.length === 0) {
+                setActiveModal(null);
+                showToast('Cannot remove tracks from read-only playlists owned by other Spotify users.');
+                return;
+            }
             const removedCountByPlaylist = {};
 
             for (const pid of playlistIds) {
@@ -1372,19 +1457,23 @@ function App() {
                     });
                 }
 
-                await provider.removeTracksFromPlaylist(token, pid, uniqueUrisToDelete);
+                try {
+                    await provider.removeTracksFromPlaylist(token, pid, uniqueUrisToDelete);
 
-                if (urisToRestore.length > 0) {
-                    await provider.addTracksToPlaylist(token, pid, urisToRestore);
-                }
+                    if (urisToRestore.length > 0) {
+                        await provider.addTracksToPlaylist(token, pid, urisToRestore);
+                    }
 
-                const removedInThisPlaylist = selectedTrackItems.filter(i => i.sourcePlaylist?.id === pid).length;
-                removedCountByPlaylist[pid] = removedInThisPlaylist;
+                    const removedInThisPlaylist = selectedTrackItems.filter(i => i.sourcePlaylist?.id === pid).length;
+                    removedCountByPlaylist[pid] = removedInThisPlaylist;
 
-                if (tracksCacheRef.current[pid]) {
-                    tracksCacheRef.current[pid] = tracksCacheRef.current[pid].filter(
-                        item => !removedKeys.has(item._selectionKey)
-                    );
+                    if (tracksCacheRef.current[pid]) {
+                        tracksCacheRef.current[pid] = tracksCacheRef.current[pid].filter(
+                            item => !removedKeys.has(item._selectionKey)
+                        );
+                    }
+                } catch (plErr) {
+                    logger.warn(`Skipping track removal on playlist ${pid}`, plErr);
                 }
             }
 
@@ -1936,9 +2025,7 @@ function App() {
                                 >
                                     <span>➕</span>
                                     <span>
-                                        {activeGenreBucket
-                                            ? `Save "${activeGenreBucket.name}" (${selectedTrackItems.length})`
-                                            : `Save as Playlist (${selectedTrackItems.length})`}
+                                        {`Create New Playlist (${selectedTrackItems.length})`}
                                     </span>
                                 </button>
 
@@ -2177,7 +2264,7 @@ function App() {
                                             <div style={{ minWidth: 0 }}>
                                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>1-Click Archive</div>
                                                 <div style={{ fontSize: '0.8rem', fontWeight: 700, marginTop: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                    Save {topRange === 'short_term' ? '4-Week Top 50' : topRange === 'medium_term' ? '6-Month Top 50' : topRange === 'long_term' ? 'All-Time Top 50' : 'Recent 50'}
+                                                    {topRange === 'short_term' ? '4-Week Top 50' : topRange === 'medium_term' ? '6-Month Top 50' : topRange === 'long_term' ? 'All-Time Top 50' : 'Recent 50'}
                                                 </div>
                                             </div>
                                             <button
@@ -2197,7 +2284,7 @@ function App() {
                                                 }}
                                                 className="v2-btn-primary brand-bg"
                                             >
-                                                Save Playlist
+                                                ➕ Create New Playlist
                                             </button>
                                         </div>
                                     </div>
@@ -2593,7 +2680,7 @@ function App() {
                                 {/* INTEGRATED SMART GENRE FAMILY SPLITTER */}
                                 <div className="obsidian-card v2-chart-card">
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                        <span className="v2-section-label">🎸 Smart Genre Family Splitter (Click to Filter &amp; Save as Playlist)</span>
+                                        <span className="v2-section-label">🎸 Smart Genre Family Splitter (Click to Filter &amp; Create New Playlist)</span>
                                         <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                                             {activeGenreBucket
                                                 ? `Filtering by ${activeGenreBucket.name} (${activeGenreBucket.count} tracks) — Click again to show all`
@@ -2995,7 +3082,7 @@ function App() {
                     <div className="v2-modal-backdrop" onClick={() => setActiveModal(null)}>
                         <div className="v2-modal-card" onClick={e => e.stopPropagation()}>
                             <div className="v2-modal-header">
-                                <h3 className="v2-modal-title">➕ Save Selected Tracks as New Playlist</h3>
+                                <h3 className="v2-modal-title">➕ Create New Playlist</h3>
                                 <button onClick={() => setActiveModal(null)} className="v2-btn-logout">✕</button>
                             </div>
                             <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.85rem' }}>

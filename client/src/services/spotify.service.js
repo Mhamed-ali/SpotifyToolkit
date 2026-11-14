@@ -259,8 +259,11 @@ export const removeTracksFromPlaylist = async (token, playlistId, trackUris) => 
         let body;
 
         if (isLiked) {
-            const ids = batch.map(uri => uri.replace('spotify:track:', ''));
-            url = "https://api.spotify.com/v1/me/tracks";
+            const ids = batch
+                .map(uri => String(uri).replace(/^spotify:track:/, '').trim())
+                .filter(id => id && !id.startsWith('spotify:'));
+            if (ids.length === 0) continue;
+            url = `https://api.spotify.com/v1/me/tracks?ids=${encodeURIComponent(ids.join(','))}`;
             body = { ids };
         } else {
             url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`;
@@ -315,8 +318,11 @@ export const addTracksToPlaylist = async (token, playlistId, trackUris) => {
         let body;
 
         if (isLiked) {
-            const ids = batch.map(uri => uri.replace('spotify:track:', ''));
-            url = "https://api.spotify.com/v1/me/tracks";
+            const ids = batch
+                .map(uri => String(uri).replace(/^spotify:track:/, '').trim())
+                .filter(id => id && !id.startsWith('spotify:'));
+            if (ids.length === 0) continue;
+            url = `https://api.spotify.com/v1/me/tracks?ids=${encodeURIComponent(ids.join(','))}`;
             method = "PUT";
             body = { ids };
         } else {
