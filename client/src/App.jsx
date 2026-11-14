@@ -302,134 +302,137 @@ function App() {
         const allCached = targetPlaylists.every(pl => Boolean(tracksCacheRef.current[pl.id]));
         let accumulated = [];
 
-        if (allCached) {
-            for (let i = 0; i < totalPlaylists; i++) {
-                accumulated.push(...tracksCacheRef.current[targetPlaylists[i].id]);
-            }
-            setRawScopeTracks(accumulated);
-        } else {
-            // Immediately display any already-cached playlists in targetPlaylists (or clear old playlist)
-            const initialCached = [];
-            for (let i = 0; i < totalPlaylists; i++) {
-                const cached = tracksCacheRef.current[targetPlaylists[i].id];
-                if (cached) initialCached.push(...cached);
-            }
-            setRawScopeTracks(initialCached);
-
-            for (let i = 0; i < totalPlaylists; i++) {
-                if (loadOperationRef.current !== opId) return;
-                const pl = targetPlaylists[i];
-
-                if (tracksCacheRef.current[pl.id]) {
-                    accumulated.push(...tracksCacheRef.current[pl.id]);
-                    continue;
+        try {
+            if (allCached) {
+                for (let i = 0; i < totalPlaylists; i++) {
+                    accumulated.push(...tracksCacheRef.current[targetPlaylists[i].id]);
                 }
+                setRawScopeTracks(accumulated);
+                setScanProgress(null);
+            } else {
+                // Immediately display any already-cached playlists in targetPlaylists (or clear old playlist)
+                const initialCached = [];
+                for (let i = 0; i < totalPlaylists; i++) {
+                    const cached = tracksCacheRef.current[targetPlaylists[i].id];
+                    if (cached) initialCached.push(...cached);
+                }
+                setRawScopeTracks(initialCached);
 
-                const expectedPlTotal = pl.tracks?.total || 0;
-                const baseAccumulatedCount = accumulated.length;
+                for (let i = 0; i < totalPlaylists; i++) {
+                    if (loadOperationRef.current !== opId) return;
+                    const pl = targetPlaylists[i];
 
+                    if (tracksCacheRef.current[pl.id]) {
+                        accumulated.push(...tracksCacheRef.current[pl.id]);
+                        continue;
+                    }
+
+                    const expectedPlTotal = pl.tracks?.total || 0;
+                    const baseAccumulatedCount = accumulated.length;
+
+                    setScanProgress({
+                        phase: 'tracks',
+                        phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
+                        playlistName: pl.name,
+                        pct: calcPass1Pct(baseAccumulatedCount),
+                        tracksAnalyzed: baseAccumulatedCount,
+                        label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
+                        subLabel: expectedPlTotal > 0
+                            ? `Scanning 0 / ${expectedPlTotal.toLocaleString()} tracks in "${pl.name}"...`
+                            : `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
+                    });
+
+                    try {
+                        const items = await fetchTracksForPlaylistCached(
+                            activeToken,
+                            pl,
+                            activeProvider,
+                            (loadedInPl, totalInPl) => {
+                                if (loadOperationRef.current !== opId) return;
+                                const totalAnalyzedNow = baseAccumulatedCount + loadedInPl;
+                                setScanProgress({
+                                    phase: 'tracks',
+                                    phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
+                                    playlistName: pl.name,
+                                    pct: calcPass1Pct(totalAnalyzedNow),
+                                    tracksAnalyzed: totalAnalyzedNow,
+                                    label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
+                                    subLabel: `Scanning ${loadedInPl.toLocaleString()} / ${totalInPl.toLocaleString()} tracks in "${pl.name}"...`
+                                });
+                            }
+                        );
+                        if (loadOperationRef.current !== opId) return;
+                        accumulated.push(...items);
+                        setRawScopeTracks([...accumulated]);
+                    } catch (err) {
+                        logger.warn(`Skipping playlist ${pl.name}`, err);
+                    }
+                }
+            }
+
+            if (loadOperationRef.current !== opId) return;
+
+            // PASS 2: Collect uncached artist IDs for tracks that did not match Pass 1 Regex
+            // so we can run Spotify Artist Genre detection (matching all 76/76 tracks!)
+            const missingArtistIds = [];
+            accumulated.forEach(item => {
+                const pass1Reason = ArabicDetector.detectTrack(item, { strictMode: false });
+                if (!pass1Reason && Array.isArray(item.track?.artists)) {
+                    item.track.artists.forEach(a => {
+                        if (a?.id && !genreCacheRef.current.has(a.id)) {
+                            missingArtistIds.push(a.id);
+                        }
+                    });
+                }
+            });
+
+            const uniqueMissingArtistIds = Array.from(new Set(missingArtistIds));
+            if (uniqueMissingArtistIds.length > 0 && activeProvider.fetchArtistsBatch) {
+                const totalArtistsToClassify = uniqueMissingArtistIds.length;
                 setScanProgress({
-                    phase: 'tracks',
-                    phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
-                    playlistName: pl.name,
-                    pct: calcPass1Pct(baseAccumulatedCount),
-                    tracksAnalyzed: baseAccumulatedCount,
-                    label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
-                    subLabel: expectedPlTotal > 0
-                        ? `Scanning 0 / ${expectedPlTotal.toLocaleString()} tracks in "${pl.name}"...`
-                        : `Scanning track titles, Franco-Arab keywords, artist script & release metadata`
+                    phase: 'genres',
+                    phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
+                    playlistName: `${totalArtistsToClassify} Artists`,
+                    pct: 80,
+                    tracksAnalyzed: accumulated.length,
+                    label: `Analyzing genres for ${totalArtistsToClassify.toLocaleString()} artists...`,
+                    subLabel: `Classified 0 / ${totalArtistsToClassify.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
                 });
 
                 try {
-                    const items = await fetchTracksForPlaylistCached(
+                    const artistObjs = await activeProvider.fetchArtistsBatch(
                         activeToken,
-                        pl,
-                        activeProvider,
-                        (loadedInPl, totalInPl) => {
+                        uniqueMissingArtistIds,
+                        (classifiedCount, totalArtists) => {
                             if (loadOperationRef.current !== opId) return;
-                            const totalAnalyzedNow = baseAccumulatedCount + loadedInPl;
+                            const ratio = Math.min(1, Math.max(0, classifiedCount / Math.max(1, totalArtists)));
+                            const pct = Math.max(80, Math.min(99, Math.round(80 + ratio * 19)));
                             setScanProgress({
-                                phase: 'tracks',
-                                phaseBadge: 'PASS 1/2 • TRACK & METADATA ANALYSIS',
-                                playlistName: pl.name,
-                                pct: calcPass1Pct(totalAnalyzedNow),
-                                tracksAnalyzed: totalAnalyzedNow,
-                                label: `Analyzing tracks in "${pl.name}" (${i + 1}/${totalPlaylists})`,
-                                subLabel: `Scanning ${loadedInPl.toLocaleString()} / ${totalInPl.toLocaleString()} tracks in "${pl.name}"...`
+                                phase: 'genres',
+                                phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
+                                playlistName: `${totalArtists} Artists`,
+                                pct,
+                                tracksAnalyzed: accumulated.length,
+                                label: `Analyzing genres for ${totalArtists.toLocaleString()} artists...`,
+                                subLabel: `Classified ${classifiedCount.toLocaleString()} / ${totalArtists.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
                             });
                         }
                     );
                     if (loadOperationRef.current !== opId) return;
-                    accumulated.push(...items);
-                    setRawScopeTracks([...accumulated]);
+                    artistObjs.forEach(artist => {
+                        if (artist?.id) {
+                            genreCacheRef.current.set(artist.id, artist.genres || []);
+                        }
+                    });
+                    setGenreCacheVersion(v => v + 1);
                 } catch (err) {
-                    logger.warn(`Skipping playlist ${pl.name}`, err);
+                    logger.warn('Artist genre batch lookup failed', err);
                 }
             }
-        }
-
-        if (loadOperationRef.current !== opId) return;
-
-        // PASS 2: Collect uncached artist IDs for tracks that did not match Pass 1 Regex
-        // so we can run Spotify Artist Genre detection (matching all 76/76 tracks!)
-        const missingArtistIds = [];
-        accumulated.forEach(item => {
-            const pass1Reason = ArabicDetector.detectTrack(item, { strictMode: false });
-            if (!pass1Reason && Array.isArray(item.track?.artists)) {
-                item.track.artists.forEach(a => {
-                    if (a?.id && !genreCacheRef.current.has(a.id)) {
-                        missingArtistIds.push(a.id);
-                    }
-                });
+        } finally {
+            if (loadOperationRef.current === opId) {
+                setScanProgress(null);
             }
-        });
-
-        const uniqueMissingArtistIds = Array.from(new Set(missingArtistIds));
-        if (uniqueMissingArtistIds.length > 0 && activeProvider.fetchArtistsBatch) {
-            const totalArtistsToClassify = uniqueMissingArtistIds.length;
-            setScanProgress({
-                phase: 'genres',
-                phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
-                playlistName: `${totalArtistsToClassify} Artists`,
-                pct: 80,
-                tracksAnalyzed: accumulated.length,
-                label: `Analyzing genres for ${totalArtistsToClassify.toLocaleString()} artists...`,
-                subLabel: `Classified 0 / ${totalArtistsToClassify.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
-            });
-
-            try {
-                const artistObjs = await activeProvider.fetchArtistsBatch(
-                    activeToken,
-                    uniqueMissingArtistIds,
-                    (classifiedCount, totalArtists) => {
-                        if (loadOperationRef.current !== opId) return;
-                        const ratio = Math.min(1, Math.max(0, classifiedCount / Math.max(1, totalArtists)));
-                        const pct = Math.max(80, Math.min(99, Math.round(80 + ratio * 19)));
-                        setScanProgress({
-                            phase: 'genres',
-                            phaseBadge: 'PASS 2/2 • ARTIST GENRE CLASSIFICATION',
-                            playlistName: `${totalArtists} Artists`,
-                            pct,
-                            tracksAnalyzed: accumulated.length,
-                            label: `Analyzing genres for ${totalArtists.toLocaleString()} artists...`,
-                            subLabel: `Classified ${classifiedCount.toLocaleString()} / ${totalArtists.toLocaleString()} artists across ${accumulated.length.toLocaleString()} analyzed tracks...`
-                        });
-                    }
-                );
-                if (loadOperationRef.current !== opId) return;
-                artistObjs.forEach(artist => {
-                    if (artist?.id) {
-                        genreCacheRef.current.set(artist.id, artist.genres || []);
-                    }
-                });
-                setGenreCacheVersion(v => v + 1);
-            } catch (err) {
-                logger.warn('Artist genre batch lookup failed', err);
-            }
-        }
-
-        if (loadOperationRef.current === opId) {
-            setScanProgress(null);
         }
     }, [fetchTracksForPlaylistCached]);
 
@@ -601,7 +604,10 @@ function App() {
         };
 
         loadComparePlaylists();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            setCompareTracksState(prev => (prev.loading ? { ...prev, loading: false } : prev));
+        };
     }, [token, activeWorkflow, comparePlaylistA, comparePlaylistB, playlistsData, likedSongsCount, provider, fetchTracksForPlaylistCached]);
 
     // Load Top 50 Tracks / Artists or Recently Played when in Top 50 & History workflow
@@ -661,7 +667,10 @@ function App() {
         };
 
         loadTopData();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            setTopTracksState(prev => (prev.loading ? { ...prev, loading: false } : prev));
+        };
     }, [token, activeWorkflow, topRange, provider, enrichTrackItem]);
 
     // =========================================================================
@@ -1366,6 +1375,28 @@ function App() {
         return uniqueArabicIds.size;
     }, [evaluatedRawTracks]);
 
+    // Global library Arabic matches count across all cached playlists (for the top workflow card)
+    const globalArabicCount = useMemo(() => {
+        const cachedLists = Object.values(tracksCacheRef.current);
+        const allCachedItems = cachedLists.length > 0 ? cachedLists.flat() : rawScopeTracks;
+        if (allCachedItems.length === 0) {
+            return allLibraryArabicCount ?? scopeArabicCount;
+        }
+        const evaluatedAll = evaluateArabicOnList(allCachedItems);
+        const uniqueArabicIds = new Set(
+            evaluatedAll.filter(t => t._isArabic && t.track?.id).map(t => t.track.id)
+        );
+        return Math.max(uniqueArabicIds.size, allLibraryArabicCount || 0);
+    }, [rawScopeTracks, evaluateArabicOnList, allLibraryArabicCount, scopeArabicCount]);
+
+    const isCurrentViewLoading =
+        isLoadingLibrary ||
+        (activeWorkflow === 'compare'
+            ? compareTracksState.loading
+            : activeWorkflow === 'top50'
+                ? topTracksState.loading
+                : Boolean(scanProgress));
+
     const isServerOffline = serverMessage.includes('Backend not connected');
 
     // =========================================================================
@@ -1563,7 +1594,7 @@ function App() {
                             <div style={{ minWidth: 0 }}>
                                 <div className="v2-qa-title">Arabic Extractor</div>
                                 <div className="v2-qa-sub">
-                                    {scopeArabicCount} Arabic matches
+                                    {globalArabicCount} Arabic matches
                                 </div>
                             </div>
                         </button>
@@ -1670,6 +1701,7 @@ function App() {
                                             key={pl.id}
                                             onClick={() => handlePlaylistClick(pl.id)}
                                             className={`v2-playlist-item ${isSelected ? 'selected' : ''}`}
+                                            title={`${pl.name} (${pl.count} tracks)`}
                                         >
                                             <div className="v2-playlist-item-left">
                                                 {isMultiSelectMode ? (
@@ -2513,7 +2545,7 @@ function App() {
 
                         {/* TRACK LIST CONTAINER */}
                         <div className="v2-tracks-list">
-                            {(isLoadingLibrary || scanProgress || compareTracksState.loading || topTracksState.loading) && filteredTracks.length === 0 ? (
+                            {isCurrentViewLoading && filteredTracks.length === 0 ? (
                                 <div className="obsidian-card v2-analyzing-empty">
                                     <div className="v2-eq-bars v2-eq-bars-lg" aria-hidden="true">
                                         <span className="v2-eq-bar" />
@@ -2531,8 +2563,10 @@ function App() {
                             ) : filteredTracks.length === 0 ? (
                                 <div className="obsidian-card" style={{ padding: '2.5rem', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
                                     {activeWorkflow === 'duplicates'
-                                        ? 'No duplicate tracks found with the current Advanced Options! Try switching Deduplication Scope to Cross-List or Match Criteria to Fuzzy.'
-                                        : 'No tracks match the current filter.'}
+                                        ? `No duplicate tracks found in "${scopeDisplayName}" with the current Advanced Options! Try switching Deduplication Scope to Cross-List or Match Criteria to Fuzzy.`
+                                        : isArabicWorkflow
+                                            ? `No Arabic tracks found in "${scopeDisplayName}" (${scopeTracks.length} tracks scanned).`
+                                            : 'No tracks match the current filter.'}
                                 </div>
                             ) : (
                                 <>
@@ -2546,9 +2580,16 @@ function App() {
                                         const thumbUrl = t.album?.images?.[t.album.images.length - 1]?.url || t.album?.images?.[0]?.url;
                                         const artistNames = t.artists?.map(a => a.name).join(', ') || 'Unknown Artist';
                                         const releaseYear = item._releaseYear || '';
-                                        const plLabel = activeWorkflow !== 'duplicates' && item.sourcePlaylists?.length > 1
-                                            ? `${item.sourcePlaylists[0]} +${item.sourcePlaylists.length - 1}`
+                                        const sourcePlaylistsList = Array.isArray(item.sourcePlaylists) && item.sourcePlaylists.length > 0
+                                            ? item.sourcePlaylists
+                                            : (item.sourcePlaylist?.name ? [item.sourcePlaylist.name] : []);
+                                        const hasMultiPlaylists = activeWorkflow !== 'duplicates' && sourcePlaylistsList.length > 1;
+                                        const plLabel = hasMultiPlaylists
+                                            ? `${sourcePlaylistsList[0]} +${sourcePlaylistsList.length - 1}`
                                             : (item.sourcePlaylist?.name || '');
+                                        const plTooltipText = sourcePlaylistsList.length > 1
+                                            ? `Found in ${sourcePlaylistsList.length} playlists: ${sourcePlaylistsList.join(' • ')}`
+                                            : (sourcePlaylistsList[0] ? `Playlist: ${sourcePlaylistsList[0]}` : '');
                                         const isPlayingPreview = previewTrack?.id === t.id;
 
                                         return (
@@ -2596,13 +2637,32 @@ function App() {
                                                             )}
                                                         </div>
                                                         <div className="v2-track-sub">
-                                                            <strong style={{ color: '#e4e4e7', fontWeight: 500 }}>{artistNames}</strong>
-                                                            {t.album?.name ? ` • ${t.album.name}` : ''}
-                                                            {releaseYear ? ` (${releaseYear})` : ''}
+                                                            <span className="v2-track-sub-text">
+                                                                <strong style={{ color: '#e4e4e7', fontWeight: 500 }}>{artistNames}</strong>
+                                                                {t.album?.name ? ` • ${t.album.name}` : ''}
+                                                                {releaseYear ? ` (${releaseYear})` : ''}
+                                                            </span>
                                                             {plLabel && (
                                                                 <>
-                                                                    {' • '}
-                                                                    <span className="brand-text">{plLabel}</span>
+                                                                    <span style={{ flexShrink: 0 }}>{'•'}</span>
+                                                                    <span
+                                                                        className={`v2-playlist-source-wrap ${hasMultiPlaylists ? 'has-multi' : ''}`}
+                                                                        title={plTooltipText}
+                                                                    >
+                                                                        <span className="brand-text v2-playlist-source-pill">{plLabel}</span>
+                                                                        {hasMultiPlaylists && (
+                                                                            <span className="v2-playlist-tooltip" role="tooltip">
+                                                                                <span className="v2-playlist-tooltip-header">
+                                                                                    Found in {sourcePlaylistsList.length} playlists:
+                                                                                </span>
+                                                                                {sourcePlaylistsList.map((pName, pIdx) => (
+                                                                                    <span key={`${pName}-${pIdx}`} className="v2-playlist-tooltip-item">
+                                                                                        • {pName}
+                                                                                    </span>
+                                                                                ))}
+                                                                            </span>
+                                                                        )}
+                                                                    </span>
                                                                 </>
                                                             )}
                                                         </div>
