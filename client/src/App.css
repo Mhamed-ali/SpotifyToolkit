@@ -177,6 +177,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.35rem;
+  flex-wrap: wrap;
   font-size: 0.75rem;
   font-weight: 600;
   color: #d4d4d8;
@@ -185,11 +187,20 @@
 
 .v2-quick-url-row {
   display: flex;
+  align-items: stretch;
   gap: 0.5rem;
+  width: 100%;
+}
+
+.v2-quick-url-row .v2-btn-primary {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .v2-input {
   flex: 1;
+  min-width: 0;
+  width: 100%;
   background: #09090b;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
@@ -306,6 +317,7 @@
   font-size: 0.95rem;
   font-weight: 800;
   color: #fff;
+  white-space: nowrap;
 }
 
 .v2-provider-badge {
@@ -313,6 +325,7 @@
   padding: 0.15rem 0.55rem;
   border-radius: 9999px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .v2-header-right {
@@ -390,6 +403,8 @@
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -711,8 +726,8 @@
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  min-width: 0;
-  flex: 1;
+  min-width: 220px;
+  flex: 1 1 260px;
 }
 
 .v2-scan-info {
@@ -720,6 +735,7 @@
   flex-direction: column;
   gap: 0.15rem;
   min-width: 0;
+  flex: 1;
 }
 
 .v2-scan-title-row {
@@ -1281,7 +1297,9 @@
   pointer-events: none;
 }
 
-.v2-playlist-source-wrap.has-multi:hover .v2-playlist-tooltip {
+.v2-playlist-source-wrap.has-multi:hover .v2-playlist-tooltip,
+.v2-playlist-source-wrap.has-multi:active .v2-playlist-tooltip,
+.v2-playlist-source-wrap.has-multi:focus-within .v2-playlist-tooltip {
   display: flex;
 }
 
@@ -1461,8 +1479,35 @@
    ========================================================================= */
 
 @media (max-width: 768px) {
+  .v2-login-wrapper {
+    padding: 0.75rem;
+    align-items: flex-start;
+  }
+
   .v2-login-card {
-    padding: 1.5rem 1.15rem;
+    padding: 1.35rem 1rem;
+    border-radius: 16px;
+  }
+
+  .v2-status-pill {
+    font-size: 0.7rem;
+    padding: 0.3rem 0.7rem;
+    margin-bottom: 1rem;
+    max-width: 100%;
+  }
+
+  .v2-quick-url-box {
+    padding: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .v2-quick-url-row {
+    gap: 0.4rem;
+  }
+
+  .v2-quick-url-row .v2-btn-primary {
+    padding: 0.52rem 0.75rem;
+    font-size: 0.75rem;
   }
 
   .v2-login-btn-grid,
@@ -1470,26 +1515,73 @@
     grid-template-columns: 1fr;
   }
 
-  /* Hide top 4 workflow cards on phone — handled by sticky bottom nav */
+  /* Compact 1-Line Sticky Header on Phone */
+  .v2-header {
+    padding: 0.55rem 0.75rem;
+    gap: 0.45rem;
+  }
+
+  .v2-header-left {
+    gap: 0.45rem;
+  }
+
+  .v2-logo-mark {
+    width: 28px;
+    height: 28px;
+    font-size: 0.85rem;
+    border-radius: 8px;
+  }
+
+  .v2-header-title-row {
+    flex-wrap: nowrap;
+    gap: 0.35rem;
+  }
+
+  .v2-app-name {
+    font-size: 0.88rem;
+  }
+
+  .v2-provider-badge {
+    font-size: 0.64rem;
+    padding: 0.1rem 0.45rem;
+  }
+
+  .v2-header-right {
+    gap: 0.4rem;
+  }
+
+  .v2-user-area {
+    gap: 0.35rem;
+    padding-left: 0.45rem;
+  }
+
+  .v2-btn-logout {
+    padding: 0.28rem 0.45rem;
+    font-size: 0.7rem;
+  }
+
+  /* Hide top 5 workflow cards on phone — handled by sticky bottom nav */
   .v2-quick-dock {
     display: none;
   }
 
   .v2-mobile-bottom-nav {
     display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    padding: 0.35rem 0.35rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
   }
 
   .v2-workspace-body {
     flex-direction: column;
   }
 
-  /* Compact 1-line horizontal swipeable playlist pills on Phone when visible */
+  /* Clean, Scrollbar-Free Horizontal Swipeable Playlist Pills on Phone */
   .v2-playlist-sidebar {
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--border-subtle);
-    padding: 0.55rem 0.85rem;
-    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    gap: 0.38rem;
   }
 
   .v2-playlist-search-wrap {
@@ -1503,12 +1595,21 @@
     max-height: none;
     gap: 0.4rem;
     padding-bottom: 2px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .v2-playlist-list::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 
   .v2-playlist-item {
     width: auto;
     flex-shrink: 0;
-    padding: 0.38rem 0.75rem;
+    padding: 0.36rem 0.72rem;
     border-radius: 9999px;
   }
 
@@ -1524,12 +1625,185 @@
   }
 
   .v2-main-content {
-    padding: 0.85rem 0.85rem 5.5rem;
+    padding: 0.75rem 0.75rem calc(5.25rem + env(safe-area-inset-bottom, 0px));
+    gap: 0.7rem;
+  }
+
+  /* Live Scan Banner on Phone — Full-Width Readable Text + Stacked Stat Row */
+  .v2-scan-banner {
+    padding: 0.65rem 0.75rem;
+    gap: 0.45rem;
+  }
+
+  .v2-scan-top {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  .v2-scan-left {
+    min-width: 0;
+    flex: 1 1 auto;
+    width: 100%;
+    align-items: flex-start;
+    gap: 0.55rem;
+  }
+
+  .v2-scan-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.22rem;
+  }
+
+  .v2-scan-phase-badge {
+    font-size: 0.58rem;
+    padding: 0.12rem 0.4rem;
+    white-space: normal;
+  }
+
+  .v2-scan-title {
+    font-size: 0.78rem;
+    line-height: 1.3;
+  }
+
+  .v2-scan-sub {
+    font-size: 0.68rem;
+    line-height: 1.3;
+  }
+
+  .v2-scan-right {
+    width: 100%;
+    justify-content: flex-start;
+    padding-top: 0.35rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    gap: 0.35rem;
+  }
+
+  .v2-scan-stat-pill {
+    font-size: 0.65rem;
+    padding: 0.18rem 0.48rem;
+  }
+
+  .v2-scan-pct {
+    margin-left: auto;
+    font-size: 0.8rem;
+  }
+
+  /* Compact View Header & Single-Row Action Bar on Phone */
+  .v2-view-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+    padding-bottom: 0.65rem;
+  }
+
+  .v2-view-title-row {
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+  }
+
+  .v2-view-title {
+    font-size: 0.96rem;
+    line-height: 1.25;
+    min-width: 0;
+  }
+
+  .v2-count-badge {
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    padding: 0.15rem 0.5rem;
+  }
+
+  .v2-view-subtitle {
+    font-size: 0.69rem;
+    line-height: 1.35;
+    margin-top: 0.15rem;
+  }
+
+  .v2-action-bar {
+    width: 100%;
+    display: flex;
+    gap: 0.38rem;
+    flex-wrap: wrap;
+  }
+
+  .v2-action-bar > button {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 0.46rem 0.55rem;
+    font-size: 0.71rem;
+    white-space: nowrap;
+  }
+
+  /* Search & Sort Toolbar on Phone */
+  .v2-toolbar-top {
+    gap: 0.4rem;
+  }
+
+  .v2-toolbar-top > .v2-input {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .v2-toolbar-top > .v2-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.72rem;
+  }
+
+  /* Track Rows on Phone */
+  .v2-track-row {
+    padding: 0.5rem 0.6rem;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .v2-track-left {
+    gap: 0.48rem;
+    min-width: 180px;
+  }
+
+  .v2-preview-btn {
+    width: 27px;
+    height: 27px;
+    font-size: 0.66rem;
+  }
+
+  .v2-track-thumb {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+  }
+
+  .v2-track-title {
+    font-size: 0.79rem;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+  }
+
+  .v2-track-sub {
+    font-size: 0.69rem;
+    flex-wrap: wrap;
+    row-gap: 1px;
+  }
+
+  .v2-track-right {
+    gap: 0.4rem;
+    margin-left: auto;
   }
 
   .v2-kpi-grid,
   .v2-adv-body {
     grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+
+  .v2-kpi-card {
+    padding: 0.65rem;
   }
 
   .v2-charts-grid {
@@ -1542,6 +1816,11 @@
 
   .v2-splitter-buckets {
     grid-template-columns: repeat(2, 1fr) !important;
+    gap: 0.45rem;
+  }
+
+  .v2-bucket-card {
+    padding: 0.6rem 0.7rem;
   }
 
   .v2-compare-grid,
@@ -1549,8 +1828,22 @@
     grid-template-columns: 1fr !important;
   }
 
-  .v2-mobile-bottom-nav {
-    grid-template-columns: repeat(5, 1fr);
+  /* Dock Mini-Player Above Sticky Bottom Navigation on Phone */
+  .v2-mini-player {
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding: 0.35rem 0.55rem;
+    gap: 0.45rem;
+  }
+
+  .v2-mini-player-embed {
+    height: 80px;
+  }
+
+  .v2-toast {
+    bottom: calc(4.4rem + env(safe-area-inset-bottom, 0px));
+    left: 0.75rem;
+    right: 0.75rem;
+    text-align: center;
   }
 }
 
