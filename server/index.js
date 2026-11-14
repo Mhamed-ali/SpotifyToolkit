@@ -15,8 +15,7 @@ logger.info('Initializing server configuration', {
     port: config.PORT,
     protocol: config.USE_HTTPS ? 'HTTPS' : 'HTTP',
     logLevel: config.LOG_LEVEL,
-    spotifyConfigured: Boolean(config.CLIENT_ID),
-    anghamiMode: config.ANGHAMI_CLIENT_ID ? 'OAuth' : 'Public/Sandbox'
+    spotifyConfigured: Boolean(config.CLIENT_ID)
 });
 
 app.use(cors());
@@ -29,10 +28,9 @@ app.use('/api/auth', authRoutes);
 
 const healthHandler = (req, res) => {
     res.json({
-        message: 'Spotify & Anghami Auth Server is running',
+        message: 'Spotify Toolkit 2.0 Auth Server is running',
         providers: {
-            spotify: Boolean(config.CLIENT_ID),
-            anghami: true
+            spotify: Boolean(config.CLIENT_ID)
         }
     });
 };

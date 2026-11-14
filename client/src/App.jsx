@@ -9,9 +9,7 @@ import { ExcelExporter, EXPORT_FIELDS } from './services/ExcelExporter';
 import {
     calculateTopArtists,
     calculateTimelineStats,
-    calculatePlaylistStats,
-    analyzeVibe,
-    getVibeDescription
+    calculatePlaylistStats
 } from './services/analysis.utils';
 import { formatDuration, extractReleaseYear } from './utils/formatters';
 import { createClientLogger } from './utils/logger';
@@ -59,10 +57,8 @@ function App() {
     const [trackSearch, setTrackSearch] = useState('');
     const [sortBy, setSortBy] = useState('default');
 
-    // Insights / Vibe State
+    // Insights State
     const [includeCollabs, setIncludeCollabs] = useState(false);
-    const [vibeStats, setVibeStats] = useState(null);
-    const [isAnalyzingVibe, setIsAnalyzingVibe] = useState(false);
 
     // Loaded Tracks, Artist Genre Cache & Selection State
     const [rawScopeTracks, setRawScopeTracks] = useState([]);
@@ -778,21 +774,6 @@ function App() {
         }
     };
 
-    const handleRunVibeAnalysis = async () => {
-        if (!token || scopeTracks.length === 0) return;
-        setIsAnalyzingVibe(true);
-        try {
-            const result = await analyzeVibe(token, scopeTracks);
-            setVibeStats(result.stats);
-            showToast('Audio vibe analysis complete!');
-        } catch (err) {
-            logger.warn('Vibe analysis error', err);
-            showToast('Could not analyze audio features');
-        } finally {
-            setIsAnalyzingVibe(false);
-        }
-    };
-
     // =========================================================================
     // LOGIN SCREEN HANDLERS
     // =========================================================================
@@ -801,29 +782,16 @@ function App() {
         window.location.href = '/login';
     };
 
-    const handleAnghamiLogin = () => {
-        localStorage.setItem('music_provider', PROVIDERS.ANGHAMI);
-        window.location.href = '/anghami/login';
-    };
-
     const handleLoginWorkflowLaunch = (workflow) => {
         localStorage.setItem('pending_workflow', workflow);
-        if (providerId === PROVIDERS.ANGHAMI) {
-            handleAnghamiLogin();
-        } else {
-            handleSpotifyLogin();
-        }
+        handleSpotifyLogin();
     };
 
     const handleLoginQuickUrlAnalyze = () => {
         const url = loginQuickUrl.trim();
         if (!url) return;
         localStorage.setItem('pending_playlist_link', url);
-        if (url.toLowerCase().includes('anghami')) {
-            handleAnghamiLogin();
-        } else {
-            handleSpotifyLogin();
-        }
+        handleSpotifyLogin();
     };
 
     // =========================================================================

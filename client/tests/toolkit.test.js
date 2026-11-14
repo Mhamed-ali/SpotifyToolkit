@@ -16,15 +16,12 @@ import {
 import { DuplicateDetector } from '../src/services/DuplicateDetector.js';
 import { ExcelExporter, EXPORT_FIELDS } from '../src/services/ExcelExporter.js';
 import {
-    getVibeDescription,
     calculateTopArtists,
     filterTracksByArtists,
     calculateTimelineStats,
-    calculatePlaylistStats,
-    analyzeVibe
+    calculatePlaylistStats
 } from '../src/services/analysis.utils.js';
 import * as spotifyService from '../src/services/spotify.service.js';
-import * as anghamiService from '../src/services/anghami.service.js';
 import { ANALYSIS_MODULES, ANALYSIS_MODULE_MAP } from '../src/config/analysisRegistry.js';
 import { getMusicProvider, PROVIDERS } from '../src/providers/ProviderFactory.js';
 import { formatDuration, formatDurationMinutes, formatDate, extractReleaseYear } from '../src/utils/formatters.js';
@@ -329,15 +326,7 @@ test('Suite 7 — ExcelExporter Builder, Custom Row Mapper, & File Download', ()
     }
 });
 
-test('Suite 8 — Analysis Utilities (Vibe, Top Artists, Timeline, Playlist Stats, Batching & Fallbacks)', async () => {
-    assert.equal(getVibeDescription(null), 'Unknown Vibe');
-    assert.equal(getVibeDescription({ energy: 0.8, danceability: 0.8, valence: 0.5, acousticness: 0.1 }), 'Total Party Starter 🎉');
-    assert.equal(getVibeDescription({ energy: 0.85, danceability: 0.5, valence: 0.5, acousticness: 0.1 }), 'High Octane ⚡');
-    assert.equal(getVibeDescription({ energy: 0.2, danceability: 0.3, valence: 0.2, acousticness: 0.2 }), 'Sad Boi Hours 🌧️');
-    assert.equal(getVibeDescription({ energy: 0.4, danceability: 0.4, valence: 0.5, acousticness: 0.8 }), 'Campfire Vibes 🏕️');
-    assert.equal(getVibeDescription({ energy: 0.6, danceability: 0.85, valence: 0.5, acousticness: 0.1 }), 'Club Banger 🕺');
-    assert.equal(getVibeDescription({ energy: 0.5, danceability: 0.5, valence: 0.5, acousticness: 0.2 }), 'Chill Mix ☕');
-
+test('Suite 8 — Analysis Utilities (Top Artists, Timeline, Playlist Stats)', () => {
     const tracks = [
         {
             track: {
@@ -378,51 +367,6 @@ test('Suite 8 — Analysis Utilities (Vibe, Top Artists, Timeline, Playlist Stat
     const pStats = calculatePlaylistStats(tracks);
     assert.equal(pStats.totalTracks, 2);
     assert.equal(pStats.avgPopularity, 80);
-
-    await assert.rejects(() => analyzeVibe('tok', []), /No valid tracks to analyze/);
-
-    const origFetch = global.fetch;
-    try {
-        // 1. 403 simulation fallback
-        global.fetch = async () => ({
-            status: 200,
-            ok: true,
-            json: async () => ({ error: { status: 403 } })
-        });
-        const vibeSim = await analyzeVibe('token', tracks);
-        assert.equal(vibeSim.warning, 'Simulated Data (API Restricted)');
-
-        // 2. Multi-batch (>100 tracks) 200 OK with onProgress callback
-        const manyTracks = Array.from({ length: 105 }, (_, idx) => ({ track: { id: `id_${idx}` } }));
-        const progressEvents = [];
-        global.fetch = async () => ({
-            status: 200,
-            ok: true,
-            json: async () => ({
-                audio_features: [
-                    { id: 'id_0', energy: 0.75, danceability: 0.8, valence: 0.6, acousticness: 0.2, instrumentalness: 0.05, tempo: 122 }
-                ]
-            })
-        });
-        const vibeOk = await analyzeVibe('token', manyTracks, (curr, total, label) => {
-            progressEvents.push({ curr, total, label });
-        });
-        assert.equal(vibeOk.warning, null);
-        assert.equal(progressEvents.length, 2);
-        assert.equal(vibeOk.stats.tempo, 122);
-
-        // 3. Non-403 batch error & empty audio features error
-        global.fetch = async () => ({
-            status: 200,
-            ok: true,
-            json: async () => {
-                throw new Error('Unexpected parse error');
-            }
-        });
-        await assert.rejects(() => analyzeVibe('token', tracks), /No audio features could be retrieved/);
-    } finally {
-        global.fetch = origFetch;
-    }
 });
 
 test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network Retry, & 401 Auto-Refresh)', async () => {
@@ -638,112 +582,10 @@ test('Suite 9 — Spotify Service (All Endpoints, Pagination, Rate-Limit/Network
     }
 });
 
-test('Suite 10 — Anghami Service (Public Mode, Authenticated Proxy Adapter, Fallbacks & Global Track Map)', async () => {
-    const origFetch = global.fetch;
-
-    try {
-        // 1. Public/Sandbox session mode
-        const pubProfile = await anghamiService.fetchAnghamiProfile('anghami_public_session');
-        assert.equal(pubProfile.provider, 'anghami');
-
-        const pubPlaylists = await anghamiService.fetchAnghamiUserPlaylists('anghami_public_session');
-        assert.ok(pubPlaylists.items.length >= 2);
-
-        const curatedPl = await anghamiService.fetchAnghamiPlaylist('anghami_public_session', 'anghami_top_arabic');
-        assert.equal(curatedPl.id, 'anghami_top_arabic');
-
-        const likedTracks = await anghamiService.fetchAnghamiPlaylistTracks('anghami_public_session', PLAYLIST_IDS.LIKED_SONGS, 0, 5);
-        assert.equal(likedTracks.items.length, 5);
-
-        const allTracks = await anghamiService.fetchAllAnghamiTracksForPlaylist('anghami_public_session', 'anghami_top_arabic');
-        assert.equal(allTracks.length, 10);
-
-        const progressCalls = [];
-        const globalMap = await anghamiService.buildAnghamiGlobalTrackMap('anghami_public_session', 'user', (c, t) => progressCalls.push({ c, t }));
-        assert.ok(globalMap['anghami:track:103'].includes('Top Arabic Hits - أغاني عربية'));
-        assert.equal(progressCalls.length, 2);
-
-        // 2. Authenticated SDK Proxy mode (covers adaptAnghamiSongToTrackItem & adaptAnghamiPlaylist)
-        global.fetch = async (url) => {
-            if (url.includes('endpoint=me')) {
-                return {
-                    ok: true,
-                    status: 200,
-                    json: async () => ({ id: 'ang_u99', name: 'Mohamed', plan: 'plus', avatarUrl: 'https://img/av.jpg' })
-                };
-            }
-            if (url.includes('endpoint=playlists/me')) {
-                return {
-                    ok: true,
-                    status: 200,
-                    json: async () => ({
-                        playlists: [
-                            {
-                                id: 'custom_123',
-                                title: 'My Anghami SDK List',
-                                artworkUrl: 'https://img/cover.jpg',
-                                items: [
-                                    { songId: 's_1', title: 'SDK Song 1', duration: 200, artistName: 'Amr Diab', coverArt: 'https://img/s1.jpg' },
-                                    { id: 's_2', name: 'SDK Song 2', duration_ms: 195000, artists: [{ id: 'a2', name: 'Wegz' }] }
-                                ]
-                            }
-                        ]
-                    })
-                };
-            }
-            if (url.includes('endpoint=playlists%2Fcustom_123')) {
-                return {
-                    ok: true,
-                    status: 200,
-                    json: async () => ({
-                        id: 'custom_123',
-                        title: 'My Anghami SDK List',
-                        artworkUrl: 'https://img/cover.jpg',
-                        items: [
-                            { songId: 's_1', title: 'SDK Song 1', duration: 200, artistName: 'Amr Diab', coverArt: 'https://img/s1.jpg' },
-                            { id: 's_2', name: 'SDK Song 2', duration_ms: 195000, artists: [{ id: 'a2', name: 'Wegz' }] }
-                        ]
-                    })
-                };
-            }
-            return { ok: false, status: 500 };
-        };
-
-        const authProfile = await anghamiService.fetchAnghamiProfile('real_ang_token');
-        assert.equal(authProfile.id, 'ang_u99');
-        assert.equal(authProfile.display_name, 'Mohamed');
-
-        const authPlaylists = await anghamiService.fetchAnghamiUserPlaylists('real_ang_token');
-        assert.equal(authPlaylists.items[0].id, 'custom_123');
-        assert.equal(authPlaylists.items[0].tracks.items[0].track.uri, 'anghami:track:s_1');
-
-        const customFetched = await anghamiService.fetchAnghamiPlaylist('real_ang_token', 'custom_123');
-        assert.equal(customFetched.id, 'custom_123');
-        assert.equal(customFetched.tracks.items.length, 2);
-
-        // 3. Proxy network error fallback paths
-        global.fetch = async () => {
-            throw new Error('Anghami proxy unreachable');
-        };
-        const fallbackProfile = await anghamiService.fetchAnghamiProfile('real_ang_token');
-        assert.equal(fallbackProfile.id, 'anghami_explorer');
-
-        const fallbackPlaylists = await anghamiService.fetchAnghamiUserPlaylists('real_ang_token');
-        assert.equal(fallbackPlaylists.items.length, 2);
-
-        const syntheticPlaylist = await anghamiService.fetchAnghamiPlaylist('real_ang_token', 'offline_999');
-        assert.equal(syntheticPlaylist.id, 'offline_999');
-    } finally {
-        global.fetch = origFetch;
-    }
-});
-
-test('Suite 11 — ProviderFactory (Spotify vs Anghami Strategy & Link Parsing)', async () => {
+test('Suite 10 — ProviderFactory (Spotify Strategy & Link Parsing)', () => {
     const spotify = getMusicProvider(PROVIDERS.SPOTIFY);
-    const anghami = getMusicProvider(PROVIDERS.ANGHAMI);
 
     assert.equal(spotify.supportsWrite, true);
-    assert.equal(anghami.supportsWrite, false);
     assert.equal(spotify.extractPlaylistIdFromInput(''), null);
     assert.equal(
         spotify.extractPlaylistIdFromInput('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=123'),
@@ -753,25 +595,9 @@ test('Suite 11 — ProviderFactory (Spotify vs Anghami Strategy & Link Parsing)'
         spotify.extractPlaylistIdFromInput('spotify:playlist:37i9dQZF1DXcBWIGoYBM5M'),
         '37i9dQZF1DXcBWIGoYBM5M'
     );
-    assert.equal(anghami.extractPlaylistIdFromInput(''), null);
-    assert.equal(
-        anghami.extractPlaylistIdFromInput('https://play.anghami.com/playlist/987654?adj=1'),
-        '987654'
-    );
-    assert.equal(
-        anghami.extractPlaylistIdFromInput('anghami:playlist:987654'),
-        '987654'
-    );
-
-    assert.deepEqual(await anghami.fetchRemainingTracks(), []);
-    assert.deepEqual(await anghami.fetchArtistsBatch(), []);
-    assert.equal((await anghami.fetchAudioFeatures()).error.status, 403);
-    await assert.rejects(() => anghami.removeTracksFromPlaylist(), /read-only/);
-    await assert.rejects(() => anghami.createPlaylist(), /read-only/);
-    await assert.rejects(() => anghami.addTracksToPlaylist(), /read-only/);
 });
 
-test('Suite 12 — Analysis Module Registry & Client Logger Ring Buffer (including >100 overflow)', () => {
+test('Suite 11 — Analysis Module Registry & Client Logger Ring Buffer (including >100 overflow)', () => {
     assert.equal(ANALYSIS_MODULES.length, 5);
     assert.ok(ANALYSIS_MODULE_MAP.cleaner);
 

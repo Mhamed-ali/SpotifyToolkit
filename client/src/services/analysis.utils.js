@@ -1,20 +1,7 @@
-import { fetchAudioFeatures } from './spotify.service.js';
-import { createClientLogger } from '../utils/logger.js';
-
-const logger = createClientLogger('VibeAnalysis');
-
 /**
- * Pure helper to determine textual vibe classification from average audio features.
+ * Pure helpers for ranking top artists, release year/decade distributions, and playlist statistics.
+ * Zero simulated or random fallbacks — 100% real Spotify track & album metadata.
  */
-export const getVibeDescription = (stats) => {
-    if (!stats || typeof stats.energy === 'undefined') return 'Unknown Vibe';
-    if (stats.energy > 0.7 && stats.danceability > 0.7) return 'Total Party Starter 🎉';
-    if (stats.energy > 0.8) return 'High Octane ⚡';
-    if (stats.valence < 0.3 && stats.energy < 0.4) return 'Sad Boi Hours 🌧️';
-    if (stats.acousticness > 0.7) return 'Campfire Vibes 🏕️';
-    if (stats.danceability > 0.8) return 'Club Banger 🕺';
-    return 'Chill Mix ☕';
-};
 
 /**
  * Pure helper to rank top artists from a track list (primary only or including collaborations).
@@ -154,97 +141,4 @@ export const calculatePlaylistStats = (tracks = []) => {
         avgPopularity,
         popBuckets
     };
-};
-
-/**
- * Analyzes audio features for a list of tracks.
- * Handles batching, rate limits (via service), and simulates data if API is restricted.
- */
-export const analyzeVibe = async (token, tracks, onProgress) => {
-    const validTracks = (tracks || []).filter(t => t?.track?.id);
-    const trackIds = validTracks.map(t => t.track.id);
-    const total = trackIds.length;
-
-    if (total === 0) throw new Error('No valid tracks to analyze.');
-
-    const batches = [];
-    for (let i = 0; i < total; i += 100) {
-        batches.push(trackIds.slice(i, i + 100));
-    }
-
-    const responses = [];
-    let fallbackTriggered = false;
-
-    for (let i = 0; i < batches.length; i++) {
-        const currentBatch = batches[i];
-
-        if (onProgress) {
-            const currentCount = i * 100;
-            onProgress(currentCount, total, `Analyzing ${currentCount}/${total}`);
-        }
-
-        try {
-            const res = await fetchAudioFeatures(token, currentBatch);
-
-            if (res.error && res.error.status === 403) {
-                throw new Error('API_RESTRICTED');
-            }
-
-            responses.push(res);
-
-            if (i < batches.length - 1) await new Promise(r => setTimeout(r, 200));
-        } catch (err) {
-            if (err.message === 'API_RESTRICTED' || err.status === 403) {
-                if (!fallbackTriggered) {
-                    logger.warn('Audio features restricted by API. Switching to simulation.');
-                    fallbackTriggered = true;
-                }
-
-                const mockFeatures = currentBatch.map(id => ({
-                    id,
-                    energy: Math.random() * 0.8 + 0.2,
-                    danceability: Math.random() * 0.8 + 0.2,
-                    valence: Math.random(),
-                    acousticness: Math.random() * 0.5,
-                    instrumentalness: Math.random() * 0.3,
-                    tempo: 100 + Math.random() * 60
-                }));
-                responses.push({ audio_features: mockFeatures });
-            } else {
-                logger.warn(`Batch ${i} failed`, err);
-            }
-        }
-    }
-
-    const warning = fallbackTriggered ? 'Simulated Data (API Restricted)' : null;
-
-    const allFeatures = responses.flatMap(res => {
-        if (!res || res.error || !res.audio_features) return [];
-        return res.audio_features;
-    }).filter(f => f && f.energy !== undefined);
-
-    if (allFeatures.length === 0) {
-        throw new Error('No audio features could be retrieved.');
-    }
-
-    const sum = allFeatures.reduce((acc, curr) => ({
-        energy: acc.energy + curr.energy,
-        danceability: acc.danceability + curr.danceability,
-        valence: acc.valence + curr.valence,
-        acousticness: acc.acousticness + curr.acousticness,
-        instrumentalness: acc.instrumentalness + curr.instrumentalness,
-        tempo: acc.tempo + curr.tempo
-    }), { energy: 0, danceability: 0, valence: 0, acousticness: 0, instrumentalness: 0, tempo: 0 });
-
-    const count = allFeatures.length;
-    const averages = {
-        energy: sum.energy / count,
-        danceability: sum.danceability / count,
-        valence: sum.valence / count,
-        acousticness: sum.acousticness / count,
-        instrumentalness: sum.instrumentalness / count,
-        tempo: sum.tempo / count
-    };
-
-    return { stats: averages, warning };
 };

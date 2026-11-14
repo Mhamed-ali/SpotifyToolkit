@@ -17,7 +17,6 @@ require.cache[axiosPath] = {
 const config = require('../config/config');
 const { createLogger, requestLoggerMiddleware } = require('../utils/logger');
 const authController = require('../controllers/auth.controller');
-const anghamiController = require('../controllers/anghami.controller');
 const authRoutes = require('../routes/auth.routes');
 
 // Helper to create mock Express req/res objects
@@ -58,7 +57,6 @@ const createMockReqRes = ({ query = {}, body = {}, cookies = {}, headers = {}, m
 test('Suite 1 — Server Config: loads defaults cleanly', () => {
     assert.ok(config.PORT);
     assert.equal(typeof config.USE_HTTPS, 'boolean');
-    assert.ok(config.ANGHAMI_SDK_URL.includes('sdk.anghami.com'));
 });
 
 test('Suite 2 — Server Logger: redacts sensitive tokens, arrays, circular objects, and debug level', () => {
@@ -224,100 +222,7 @@ test('Suite 4 — Spotify Auth Controller (login, callback success/failure, refr
     assert.equal(refFailRes.jsonBody.error, 'Failed to refresh token');
 });
 
-test('Suite 5 — Anghami Auth Controller (Public/Sandbox login, PKCE login, callback success/failure, proxy success/failure)', async () => {
-    const originalClientId = config.ANGHAMI_CLIENT_ID;
-    const originalApiKey = config.ANGHAMI_API_KEY;
-
-    try {
-        // 1. Public/Sandbox login when ANGHAMI_CLIENT_ID is empty
-        config.ANGHAMI_CLIENT_ID = '';
-        const { req: pubReq, res: pubRes } = createMockReqRes();
-        anghamiController.login(pubReq, pubRes);
-        assert.ok(pubRes.redirectUrl.includes('provider=anghami'));
-        assert.ok(pubRes.redirectUrl.includes('mode=public'));
-
-        // 2. OAuth 2.0 + PKCE login when ANGHAMI_CLIENT_ID is configured
-        config.ANGHAMI_CLIENT_ID = 'test_anghami_client';
-        const { req: pkceReq, res: pkceRes } = createMockReqRes();
-        anghamiController.login(pkceReq, pkceRes);
-        assert.ok(pkceRes.cookiesSet.anghami_auth_state.val);
-        assert.ok(pkceRes.cookiesSet.anghami_pkce_verifier.val);
-        assert.ok(pkceRes.redirectUrl.includes('code_challenge_method=S256'));
-
-        // 3. Callback rejects state mismatch
-        const { req: cbReq, res: cbRes } = createMockReqRes({
-            query: { code: '123', state: 'bad' },
-            cookies: { anghami_auth_state: 'good' }
-        });
-        await anghamiController.callback(cbReq, cbRes);
-        assert.ok(cbRes.redirectUrl.includes('error=anghami_state_mismatch'));
-
-        // 4. Callback succeeds when state matches and axios.post resolves
-        mockAxiosHandler = async () => ({
-            data: { access_token: 'ang_acc_1', refresh_token: 'ang_ref_1' }
-        });
-        const { req: cbOkReq, res: cbOkRes } = createMockReqRes({
-            query: { code: 'ang_code', state: 'good_state' },
-            cookies: { anghami_auth_state: 'good_state', anghami_pkce_verifier: 'verifier_123' }
-        });
-        await anghamiController.callback(cbOkReq, cbOkRes);
-        assert.ok(cbOkRes.cookiesCleared.includes('anghami_auth_state'));
-        assert.ok(cbOkRes.cookiesCleared.includes('anghami_pkce_verifier'));
-        assert.ok(cbOkRes.redirectUrl.includes('access_token=ang_acc_1'));
-
-        // 5. Callback redirects with error when axios.post rejects
-        mockAxiosHandler = async () => {
-            throw new Error('Anghami token error');
-        };
-        const { req: cbFailReq, res: cbFailRes } = createMockReqRes({
-            query: { code: 'bad_code', state: 'good_state' },
-            cookies: { anghami_auth_state: 'good_state', anghami_pkce_verifier: 'verifier_123' }
-        });
-        await anghamiController.callback(cbFailReq, cbFailRes);
-        assert.ok(cbFailRes.redirectUrl.includes('error=anghami_invalid_token'));
-
-        // 6. Proxy rejects missing endpoint parameter
-        const { req: proxyMissingReq, res: proxyMissingRes } = createMockReqRes();
-        await anghamiController.proxyRequest(proxyMissingReq, proxyMissingRes);
-        assert.equal(proxyMissingRes.statusCode, 400);
-        assert.equal(proxyMissingRes.jsonBody.error, 'Missing endpoint parameter');
-
-        // 7. Proxy forwards Authorization & x-api-key headers and returns upstream JSON
-        config.ANGHAMI_API_KEY = 'ang_key_999';
-        mockAxiosHandler = async (reqConfig) => ({
-            data: { items: [{ id: 'pl_1' }], echoedHeaders: reqConfig.headers }
-        });
-        const { req: proxyOkReq, res: proxyOkRes } = createMockReqRes({
-            query: { endpoint: '/playlists/me', params: JSON.stringify({ limit: 10 }) },
-            headers: { authorization: 'Bearer real_anghami_token' },
-            method: 'POST',
-            body: { test: true }
-        });
-        await anghamiController.proxyRequest(proxyOkReq, proxyOkRes);
-        assert.equal(proxyOkRes.statusCode, 200);
-        assert.equal(proxyOkRes.jsonBody.echoedHeaders['Authorization'], 'Bearer real_anghami_token');
-        assert.equal(proxyOkRes.jsonBody.echoedHeaders['x-api-key'], 'ang_key_999');
-
-        // 8. Proxy handles upstream failure with status code & ANGHAMI_API_UNAVAILABLE
-        mockAxiosHandler = async () => {
-            const err = new Error('Upstream gateway timeout');
-            err.response = { status: 503, data: { message: 'Service Temporarily Unavailable' } };
-            throw err;
-        };
-        const { req: proxyErrReq, res: proxyErrRes } = createMockReqRes({
-            query: { endpoint: 'me' }
-        });
-        await anghamiController.proxyRequest(proxyErrReq, proxyErrRes);
-        assert.equal(proxyErrRes.statusCode, 503);
-        assert.equal(proxyErrRes.jsonBody.error, 'ANGHAMI_API_UNAVAILABLE');
-        assert.equal(proxyErrRes.jsonBody.message, 'Service Temporarily Unavailable');
-    } finally {
-        config.ANGHAMI_CLIENT_ID = originalClientId;
-        config.ANGHAMI_API_KEY = originalApiKey;
-    }
-});
-
-test('Suite 6 — Express Auth Routes Registration', () => {
+test('Suite 5 — Express Auth Routes Registration', () => {
     const registeredPaths = authRoutes.stack
         .filter(layer => layer.route)
         .map(layer => layer.route.path);
@@ -325,7 +230,4 @@ test('Suite 6 — Express Auth Routes Registration', () => {
     assert.ok(registeredPaths.includes('/login'));
     assert.ok(registeredPaths.includes('/callback'));
     assert.ok(registeredPaths.includes('/refresh_token'));
-    assert.ok(registeredPaths.includes('/anghami/login'));
-    assert.ok(registeredPaths.includes('/anghami/callback'));
-    assert.ok(registeredPaths.includes('/anghami/proxy'));
 });
